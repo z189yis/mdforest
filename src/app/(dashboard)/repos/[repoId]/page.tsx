@@ -10,8 +10,10 @@ import { MarkdownEditor } from "@/components/editor/MarkdownEditor";
 import { MarkdownPreview } from "@/components/editor/MarkdownPreview";
 import { CollaborativeEditor } from "@/components/editor/CollaborativeEditor";
 import { useYjsProvider } from "@/lib/hooks/useYjsProvider";
+import { useCollaborativeLeaves } from "@/lib/hooks/useCollaborativeLeaves";
 import { AvatarList } from "@/components/collaboration/AvatarList";
 import { ConflictToast } from "@/components/collaboration/ConflictToast";
+import { ViewportIndicator } from "@/components/collaboration/ViewportIndicator";
 import { SearchBar } from "@/components/search/SearchBar";
 import { ResizablePanels } from "@/components/layout/ResizablePanels";
 import { Spinner } from "@/components/ui";
@@ -38,6 +40,20 @@ export default function RepoTreePage() {
     isSynced,
     connectionStatus,
   } = useYjsProvider(collabEnabled ? selectedDocId : null);
+
+  // Collaborative canvas leaves
+  const handleRemoteLeafChange = useCallback(
+    (leafId: string, x: number, y: number) => {
+      // Update leaf position from remote change via Yjs
+      updateLeafPosition.mutate({ docId: leafId, leafX: x, leafY: y });
+      utils.git.docLeaves.invalidate({ repoId });
+    },
+    [repoId, utils]
+  );
+  const { setLeafPosition } = useCollaborativeLeaves(
+    collabEnabled ? ydoc : null,
+    collabEnabled ? handleRemoteLeafChange : undefined,
+  );
 
   // Fetch selected doc content
   const { data: selectedDoc } = trpc.document.get.useQuery(
@@ -93,8 +109,12 @@ export default function RepoTreePage() {
   const handleLeafPositionChange = useCallback(
     (docId: string, leafX: number, leafY: number) => {
       updateLeafPosition.mutate({ docId, leafX, leafY });
+      // Broadcast to other collaborators via Yjs
+      if (collabEnabled) {
+        setLeafPosition(docId, leafX, leafY);
+      }
     },
-    [updateLeafPosition]
+    [updateLeafPosition, collabEnabled, setLeafPosition]
   );
 
   // Panel config
@@ -147,17 +167,26 @@ export default function RepoTreePage() {
         {/* Left: Git Tree */}
         <div className="relative h-full">
           {repo.cloneStatus === "ready" ? (
-            <GitTreeCanvas
-              tree={tree} isLoading={treeLoading} error={treeError}
-              docLeaves={docLeaves}
-              onCommitClick={handleCommitClick}
-              onDocClick={handleDocClick}
-              onFileDrop={handleFileDrop}
-              onLeafPositionChange={handleLeafPositionChange}
-              onNeedMore={fetchMore}
-              hasMore={hasMore}
-              isFetchingMore={isFetchingMore}
-            />
+            <>
+              <GitTreeCanvas
+                tree={tree} isLoading={treeLoading} error={treeError}
+                docLeaves={docLeaves}
+                onCommitClick={handleCommitClick}
+                onDocClick={handleDocClick}
+                onFileDrop={handleFileDrop}
+                onLeafPositionChange={handleLeafPositionChange}
+                onNeedMore={fetchMore}
+                hasMore={hasMore}
+                isFetchingMore={isFetchingMore}
+              />
+              {collabEnabled && awareness && (
+                <ViewportIndicator
+                  awareness={awareness}
+                  canvasWidth={800}
+                  canvasHeight={600}
+                />
+              )}
+            </>
           ) : (
             <div className="flex items-center justify-center h-full">
               <div className="text-center text-zinc-500">
