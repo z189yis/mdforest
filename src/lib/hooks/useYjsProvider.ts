@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { useSession } from "next-auth/react";
 import * as Y from "yjs";
 import { WebsocketProvider } from "y-websocket";
 import { IndexeddbPersistence } from "y-indexeddb";
@@ -32,6 +33,7 @@ const USER_COLORS = [
  * and teardown when docId changes or component unmounts.
  */
 export function useYjsProvider(docId: string | null): UseYjsProviderResult {
+  const { data: session } = useSession();
   const ydocRef = useRef<Y.Doc | null>(null);
   const wsProviderRef = useRef<WebsocketProvider | null>(null);
   const idxdbRef = useRef<IndexeddbPersistence | null>(null);
@@ -96,11 +98,12 @@ export function useYjsProvider(docId: string | null): UseYjsProviderResult {
       });
       wsProviderRef.current = wsProvider;
 
-      // Configure awareness to only expose safe data
+      // Configure awareness — only expose minimal safe data (no userId, email, role)
       wsProvider.awareness.setLocalState({
         user: {
-          name: "User", // Will be updated when we have access to session
+          name: session?.user?.name ?? "Anonymous",
           color: USER_COLORS[Math.floor(Math.random() * USER_COLORS.length)],
+          avatar: session?.user?.image ?? undefined,
         },
       });
 

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { protectedProcedure, router } from "@/server/api/trpc";
+import { repoReadProcedure, router } from "@/server/api/trpc";
 import { gitLogAll, gitLogBranch, gitCommitCount, gitShow, gitBranches, parseDiff } from "@/server/git/cli";
 import { buildGitTree, createTreeState, type TreeState } from "@/server/git/tree-builder";
 import { getRepoPath } from "@/server/git/clone";
@@ -16,7 +16,7 @@ function jsonToArr(json: string | string[]): string[] {
 }
 
 export const gitRouter = router({
-  tree: protectedProcedure
+  tree: repoReadProcedure
     .input(z.object({
       repoId: z.string(),
       branch: z.string().optional(),
@@ -25,8 +25,8 @@ export const gitRouter = router({
       state: z.any().optional(), // TreeState from previous batch
     }))
     .query(async ({ ctx, input }) => {
-      const repo = await ctx.prisma.repo.findFirst({
-        where: { id: input.repoId, ownerId: ctx.user.id },
+      const repo = await ctx.prisma.repo.findUnique({
+        where: { id: input.repoId },
       });
       if (!repo) throw new Error("Repository not found");
 
@@ -49,14 +49,21 @@ export const gitRouter = router({
     }),
 
   /** Leaves with positions, connections, and isolated documents */
-  docLeaves: protectedProcedure
+  docLeaves: repoReadProcedure
     .input(z.object({ repoId: z.string() }))
     .query(async ({ ctx, input }) => {
       type LeafData = { id: string; title: string; leafX: number | null; leafY: number | null; connectedHashes: string[] };
 
       const [docs, bindings] = await Promise.all([
         ctx.prisma.document.findMany({
-          where: { repoId: input.repoId, ownerId: ctx.user.id },
+          where: {
+            repoId: input.repoId,
+            OR: [
+              { ownerId: ctx.user.id },
+              { collaborators: { some: { userId: ctx.user.id } } },
+              { isPublic: true },
+            ],
+          },
           select: { id: true, title: true, leafX: true, leafY: true },
           take: 5000,
         }),
@@ -97,11 +104,11 @@ export const gitRouter = router({
       return { byCommit, isolated, leafMap };
     }),
 
-  commitDetail: protectedProcedure
+  commitDetail: repoReadProcedure
     .input(z.object({ repoId: z.string(), hash: z.string() }))
     .query(async ({ ctx, input }) => {
-      const repo = await ctx.prisma.repo.findFirst({
-        where: { id: input.repoId, ownerId: ctx.user.id },
+      const repo = await ctx.prisma.repo.findUnique({
+        where: { id: input.repoId },
       });
       if (!repo) throw new Error("Repository not found");
 
@@ -139,11 +146,11 @@ export const gitRouter = router({
       };
     }),
 
-  branches: protectedProcedure
+  branches: repoReadProcedure
     .input(z.object({ repoId: z.string() }))
     .query(async ({ ctx, input }) => {
-      const repo = await ctx.prisma.repo.findFirst({
-        where: { id: input.repoId, ownerId: ctx.user.id },
+      const repo = await ctx.prisma.repo.findUnique({
+        where: { id: input.repoId },
       });
       if (!repo) throw new Error("Repository not found");
 

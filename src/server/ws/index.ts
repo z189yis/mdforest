@@ -5,6 +5,7 @@ import * as encoding from "lib0/encoding";
 import * as decoding from "lib0/decoding";
 import { authenticateWs, CloseCodes, type AuthenticatedUser } from "./auth";
 import { roomManager } from "./room-manager-global";
+import { canJoinRoom } from "@/server/auth/permissions";
 
 const MAX_UPDATE_SIZE = parseInt(
   process.env.UPDATE_MAX_SIZE ?? `${5 * 1024 * 1024}`,
@@ -105,6 +106,14 @@ httpServer.on("upgrade", async (req, socket, head) => {
   const docId = url.searchParams.get("docId");
   if (!docId) {
     socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
+    socket.destroy();
+    return;
+  }
+
+  // Check permission before accepting the connection
+  const allowed = await canJoinRoom(auth.userId, docId);
+  if (!allowed) {
+    socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
     socket.destroy();
     return;
   }
