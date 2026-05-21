@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "concurrently \"next dev\" \"tsx src/server/ws/index.ts\"",
+    "dev": "concurrently \"next dev\" \"npx tsx src/server/ws/index.ts\"",
     "dev:next": "next dev",
-    "dev:ws": "tsx src/server/ws/index.ts",
+    "dev:ws": "npx tsx src/server/ws/index.ts",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
