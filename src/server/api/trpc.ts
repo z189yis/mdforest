@@ -44,9 +44,11 @@ export const protectedProcedure = t.procedure.use(isAuthed);
 
 /**
  * Require at least "read" access to a repo.
- * Extracts repoId from input.
+ * Extracts repoId from input via getRawInput().
  */
-const requireRepoRead = middleware(async ({ ctx, next, rawInput }) => {
+const requireRepoRead = middleware(async (opts) => {
+  const { ctx, next, getRawInput } = opts;
+  const rawInput = await getRawInput();
   const result = z.object({ repoId: z.string() }).passthrough().safeParse(rawInput);
   if (!result.success) {
     throw new TRPCError({ code: "BAD_REQUEST", message: "repoId required" });
@@ -63,7 +65,9 @@ const requireRepoRead = middleware(async ({ ctx, next, rawInput }) => {
 /**
  * Require at least "write" access to a repo.
  */
-const requireRepoWrite = middleware(async ({ ctx, next, rawInput }) => {
+const requireRepoWrite = middleware(async (opts) => {
+  const { ctx, next, getRawInput } = opts;
+  const rawInput = await getRawInput();
   const result = z.object({ repoId: z.string() }).passthrough().safeParse(rawInput);
   if (!result.success) {
     throw new TRPCError({ code: "BAD_REQUEST", message: "repoId required" });
@@ -81,7 +85,9 @@ const requireRepoWrite = middleware(async ({ ctx, next, rawInput }) => {
  * Require at least "read" access to a document.
  * Extracts docId from input.
  */
-const requireDocRead = middleware(async ({ ctx, next, rawInput }) => {
+const requireDocRead = middleware(async (opts) => {
+  const { ctx, next, getRawInput } = opts;
+  const rawInput = await getRawInput();
   const result = z.object({ docId: z.string() }).passthrough().safeParse(rawInput);
   if (!result.success) {
     throw new TRPCError({ code: "BAD_REQUEST", message: "docId required" });
@@ -98,7 +104,9 @@ const requireDocRead = middleware(async ({ ctx, next, rawInput }) => {
 /**
  * Require at least "write" access to a document.
  */
-const requireDocWrite = middleware(async ({ ctx, next, rawInput }) => {
+const requireDocWrite = middleware(async (opts) => {
+  const { ctx, next, getRawInput } = opts;
+  const rawInput = await getRawInput();
   const result = z.object({ docId: z.string() }).passthrough().safeParse(rawInput);
   if (!result.success) {
     throw new TRPCError({ code: "BAD_REQUEST", message: "docId required" });

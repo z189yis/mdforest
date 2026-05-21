@@ -128,7 +128,14 @@ export default function RepoTreePage() {
   }
 
   if (error || !repo) {
-    return <div className="flex items-center justify-center h-full"><div className="text-center text-red-500">Failed to load repository</div></div>;
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="text-center text-red-500">
+          <p className="text-lg font-semibold">Failed to load repository</p>
+          {error && <p className="text-xs mt-2 text-red-400">{error.message}</p>}
+        </div>
+      </div>
+    );
   }
 
   return (
