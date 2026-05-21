@@ -68,7 +68,7 @@ export function ResizablePanels({ panels, children, onChange }: ResizablePanelsP
   }
 
   return (
-    <div ref={containerRef} className="flex-1 flex overflow-hidden">
+    <div ref={containerRef} className="flex-1 flex overflow-hidden h-full w-full">
       {visible.map((panel, vi) => {
         const isLast = vi === visible.length - 1;
         return (
