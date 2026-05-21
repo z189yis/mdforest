@@ -41,14 +41,18 @@ export default function RepoTreePage() {
     connectionStatus,
   } = useYjsProvider(collabEnabled ? selectedDocId : null);
 
+  const utils = trpc.useUtils();
+  const updateLeafPosition = trpc.document.updateLeafPosition.useMutation({
+    onError: (err) => toast.error(err.message),
+  });
+
   // Collaborative canvas leaves
   const handleRemoteLeafChange = useCallback(
     (leafId: string, x: number, y: number) => {
-      // Update leaf position from remote change via Yjs
       updateLeafPosition.mutate({ docId: leafId, leafX: x, leafY: y });
       utils.git.docLeaves.invalidate({ repoId });
     },
-    [repoId, utils]
+    [repoId, utils, updateLeafPosition]
   );
   const { setLeafPosition } = useCollaborativeLeaves(
     collabEnabled ? ydoc : null,
@@ -60,7 +64,6 @@ export default function RepoTreePage() {
     { docId: selectedDocId! },
     { enabled: !!selectedDocId }
   );
-  const utils = trpc.useUtils();
   const saveDoc = trpc.document.update.useMutation({
     onSuccess: () => {
       toast.success("Saved");
@@ -84,10 +87,6 @@ export default function RepoTreePage() {
       toast.success("Isolated leaf created");
       utils.git.docLeaves.invalidate({ repoId });
     },
-    onError: (err) => toast.error(err.message),
-  });
-
-  const updateLeafPosition = trpc.document.updateLeafPosition.useMutation({
     onError: (err) => toast.error(err.message),
   });
 
