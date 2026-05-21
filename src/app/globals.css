@@ -1,0 +1,60 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+/* CodeMirror overrides */
+.cm-editor {
+  height: 100%;
+}
+
+.cm-editor .cm-scroller {
+  font-size: 14px;
+}
+
+/* Diff styling */
+.diff-add {
+  background: rgba(34, 197, 94, 0.15);
+  color: #16a34a;
+}
+
+.diff-del {
+  background: rgba(239, 68, 68, 0.15);
+  color: #dc2626;
+}
+
+.diff-header {
+  background: rgba(99, 102, 241, 0.1);
+  color: #6366f1;
+}
+
+/* Markdown preview */
+.prose pre {
+  background: #1a1a2e;
+  border-radius: 0.5rem;
+  padding: 1rem;
+  overflow-x: auto;
+}
+
+.prose code {
+  font-size: 0.875em;
+}
+
+.prose img {
+  max-width: 100%;
+  border-radius: 0.5rem;
+}
