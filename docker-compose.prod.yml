@@ -1,0 +1,71 @@
+version: "3.8"
+
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - NEXTAUTH_URL=${NEXTAUTH_URL}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
+      - DATA_DIR=/data/repos
+      - NEXT_PUBLIC_COLLAB_ENABLED=${COLLAB_ENABLED:-false}
+    volumes:
+      - data_repos:/data/repos
+    depends_on:
+      db:
+        condition: service_healthy
+
+  ws:
+    build:
+      context: .
+      dockerfile: Dockerfile.ws
+    restart: unless-stopped
+    ports:
+      - "${WS_PORT:-3001}:3001"
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - WS_PORT=3001
+      - WS_HOST=0.0.0.0
+      - TICKET_TTL_MS=${TICKET_TTL_MS:-30000}
+      - UPDATE_MAX_SIZE=${UPDATE_MAX_SIZE:-5242880}
+      - DOC_LRU_MAX=${DOC_LRU_MAX:-100}
+      - SNAPSHOT_INTERVAL_MS=${SNAPSHOT_INTERVAL_MS:-30000}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${TLS_CERT_PATH:-./certs/cert.pem}:/etc/ssl/cert.pem:ro
+      - ${TLS_KEY_PATH:-./certs/key.pem}:/etc/ssl/key.pem:ro
+    depends_on:
+      - app
+      - ws
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-mdforest}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-mdforest}
+      - POSTGRES_DB=${POSTGRES_DB:-mdforest}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mdforest}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  db_data:
+  data_repos:
