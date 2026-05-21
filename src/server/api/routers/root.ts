@@ -4,6 +4,7 @@ import { gitRouter } from "./git.router";
 import { documentRouter } from "./document.router";
 import { bindingRouter } from "./binding.router";
 import { searchRouter } from "./search.router";
+import { wsRouter } from "./ws.router";
 
 export const appRouter = router({
   repo: repoRouter,
@@ -11,6 +12,7 @@ export const appRouter = router({
   document: documentRouter,
   binding: bindingRouter,
   search: searchRouter,
+  ws: wsRouter,
   health: publicProcedure.query(() => "ok"),
 });
 
