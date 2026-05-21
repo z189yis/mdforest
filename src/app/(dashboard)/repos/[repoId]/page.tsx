@@ -177,7 +177,7 @@ export default function RepoTreePage() {
       <div className="flex-1 relative overflow-hidden">
         <ResizablePanels panels={panels}>
           {/* Left: Git Tree */}
-          <div className="relative h-full">
+          <div className="relative h-full w-full">
             {repo.cloneStatus === "ready" ? (
               <>
                 <GitTreeCanvas
