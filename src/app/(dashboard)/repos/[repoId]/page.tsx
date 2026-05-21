@@ -20,7 +20,7 @@ export default function RepoTreePage() {
   const { data: docLeaves } = trpc.git.docLeaves.useQuery({ repoId });
 
   const [branch, setBranch] = useState<string | undefined>(undefined);
-  const { tree, isLoading: treeLoading, error: treeError, refetch: refetchTree } = useGitTree(repoId, branch);
+  const { tree, isLoading: treeLoading, error: treeError, refetch: refetchTree, fetchMore, hasMore, isFetchingMore, totalCount } = useGitTree(repoId, branch);
 
   const [selectedCommitHash, setSelectedCommitHash] = useState<string | null>(null);
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
@@ -116,7 +116,7 @@ export default function RepoTreePage() {
         {repo.cloneStatus !== "ready" && (
           <span className="text-xs px-2 py-0.5 rounded bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400">{repo.cloneStatus}</span>
         )}
-        {tree && <span className="text-xs text-zinc-400">{tree.nodes.length} commits</span>}
+        {totalCount > 0 && <span className="text-xs text-zinc-400">{tree ? tree.nodes.length : 0}/{totalCount} commits</span>}
 
         <div className="ml-auto flex items-center gap-2">
           {selectedDocId && (
@@ -141,6 +141,9 @@ export default function RepoTreePage() {
               onDocClick={handleDocClick}
               onFileDrop={handleFileDrop}
               onLeafPositionChange={handleLeafPositionChange}
+              onNeedMore={fetchMore}
+              hasMore={hasMore}
+              isFetchingMore={isFetchingMore}
             />
           ) : (
             <div className="flex items-center justify-center h-full">

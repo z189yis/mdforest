@@ -1,8 +1,10 @@
 import { z } from "zod";
 import { protectedProcedure, router } from "@/server/api/trpc";
-import { gitLogAll, gitLogBranch, gitShow, gitBranches, parseDiff } from "@/server/git/cli";
-import { buildGitTree } from "@/server/git/tree-builder";
+import { gitLogAll, gitLogBranch, gitCommitCount, gitShow, gitBranches, parseDiff } from "@/server/git/cli";
+import { buildGitTree, createTreeState, type TreeState } from "@/server/git/tree-builder";
 import { getRepoPath } from "@/server/git/clone";
+
+const PAGE_SIZE = 200;
 
 function arrToJson(arr: string[]): string {
   return JSON.stringify(arr);
@@ -15,64 +17,35 @@ function jsonToArr(json: string | string[]): string[] {
 
 export const gitRouter = router({
   tree: protectedProcedure
-    .input(z.object({ repoId: z.string(), branch: z.string().optional() }))
+    .input(z.object({
+      repoId: z.string(),
+      branch: z.string().optional(),
+      skip: z.number().default(0),
+      take: z.number().default(PAGE_SIZE),
+      state: z.any().optional(), // TreeState from previous batch
+    }))
     .query(async ({ ctx, input }) => {
       const repo = await ctx.prisma.repo.findFirst({
         where: { id: input.repoId, ownerId: ctx.user.id },
       });
       if (!repo) throw new Error("Repository not found");
 
-      const entries = input.branch
-        ? await gitLogBranch(repo.localPath, input.branch, 0, 500)
-        : await gitLogAll(repo.localPath);
-      const tree = buildGitTree(entries);
+      const [entries, totalCount] = await Promise.all([
+        input.branch
+          ? gitLogBranch(repo.localPath, input.branch, input.skip, input.take)
+          : gitLogAll(repo.localPath, input.skip, input.take),
+        gitCommitCount(repo.localPath),
+      ]);
 
-      // Cache commits in database
-      for (const entry of entries) {
-        const branches: string[] = [];
-        const tags: string[] = [];
-        for (const ref of entry.refs) {
-          if (ref.startsWith("tag: ")) tags.push(ref.replace("tag: ", ""));
-          else branches.push(ref.replace("HEAD -> ", "").replace("origin/", "").trim());
-        }
+      const prevState = (input.state as TreeState | undefined) ?? createTreeState();
+      const { tree, state: nextState } = buildGitTree(entries, prevState);
 
-        const uniqueBranches = [...new Set(branches)].filter(Boolean);
-        const uniqueTags = [...new Set(tags)].filter(Boolean);
+      const hasMore = input.skip + entries.length < totalCount;
 
-        try {
-          await ctx.prisma.commitCache.upsert({
-            where: { repoId_commitHash: { repoId: repo.id, commitHash: entry.hash } },
-            update: {
-              shortHash: entry.shortHash,
-              parentHashes: arrToJson(entry.parentHashes),
-              authorName: entry.authorName,
-              authorEmail: entry.authorEmail,
-              authorDate: entry.authorDate,
-              message: entry.message,
-              branches: arrToJson(uniqueBranches),
-              tags: arrToJson(uniqueTags),
-              isMerge: entry.isMerge,
-            },
-            create: {
-              repoId: repo.id,
-              commitHash: entry.hash,
-              shortHash: entry.shortHash,
-              parentHashes: arrToJson(entry.parentHashes),
-              authorName: entry.authorName,
-              authorEmail: entry.authorEmail,
-              authorDate: entry.authorDate,
-              message: entry.message,
-              branches: arrToJson(uniqueBranches),
-              tags: arrToJson(uniqueTags),
-              isMerge: entry.isMerge,
-            },
-          });
-        } catch {
-          // Ignore duplicate key errors
-        }
-      }
+      // Cache commits in database (fire-and-forget)
+      cacheCommits(ctx.prisma, repo.id, entries);
 
-      return tree;
+      return { tree, totalCount, hasMore, state: nextState as any, skip: input.skip };
     }),
 
   /** Leaves with positions, connections, and isolated documents */
@@ -177,3 +150,50 @@ export const gitRouter = router({
       return gitBranches(repo.localPath);
     }),
 });
+
+// Fire-and-forget: cache commits in the database (errors are non-fatal)
+async function cacheCommits(prisma: any, repoId: string, entries: any[]) {
+  for (const entry of entries) {
+    const branches: string[] = [];
+    const tags: string[] = [];
+    for (const ref of entry.refs) {
+      if (ref.startsWith("tag: ")) tags.push(ref.replace("tag: ", ""));
+      else branches.push(ref.replace("HEAD -> ", "").replace("origin/", "").trim());
+    }
+
+    const uniqueBranches = [...new Set(branches)].filter(Boolean);
+    const uniqueTags = [...new Set(tags)].filter(Boolean);
+
+    try {
+      await prisma.commitCache.upsert({
+        where: { repoId_commitHash: { repoId, commitHash: entry.hash } },
+        update: {
+          shortHash: entry.shortHash,
+          parentHashes: arrToJson(entry.parentHashes),
+          authorName: entry.authorName,
+          authorEmail: entry.authorEmail,
+          authorDate: entry.authorDate,
+          message: entry.message,
+          branches: arrToJson(uniqueBranches),
+          tags: arrToJson(uniqueTags),
+          isMerge: entry.isMerge,
+        },
+        create: {
+          repoId,
+          commitHash: entry.hash,
+          shortHash: entry.shortHash,
+          parentHashes: arrToJson(entry.parentHashes),
+          authorName: entry.authorName,
+          authorEmail: entry.authorEmail,
+          authorDate: entry.authorDate,
+          message: entry.message,
+          branches: arrToJson(uniqueBranches),
+          tags: arrToJson(uniqueTags),
+          isMerge: entry.isMerge,
+        },
+      });
+    } catch {
+      // Ignore duplicate key errors
+    }
+  }
+}
