@@ -174,9 +174,8 @@ export default function RepoTreePage() {
       </div>
 
       {/* Panels: Tree + Detail */}
-      <div className="flex-1 min-h-0 flex flex-col">
-        <div className="flex-1 min-h-0">
-          <ResizablePanels panels={panels}>
+      <div className="flex-1 relative overflow-hidden">
+        <ResizablePanels panels={panels}>
           {/* Left: Git Tree */}
           <div className="relative h-full">
             {repo.cloneStatus === "ready" ? (
@@ -237,11 +236,9 @@ export default function RepoTreePage() {
             )}
           </div>
         </ResizablePanels>
-        </div>
-      </div>
 
-      {/* Floating MD Windows — render as fixed overlay outside flex layout */}
-      {windows.map((w) => (
+        {/* Floating MD Windows overlay */}
+        {windows.map((w) => (
         <MDWindow
           key={w.id}
           window={w}
@@ -259,7 +256,7 @@ export default function RepoTreePage() {
 
       {/* Minimized window tabs */}
       {minimizedWindows.length > 0 && (
-        <div className="fixed bottom-0 left-0 right-0 flex gap-1 px-2 py-1 bg-zinc-100 dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-700 z-50">
+        <div className="absolute bottom-0 left-0 right-0 flex gap-1 px-2 py-1 bg-zinc-100 dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-700">
           {minimizedWindows.map((w) => (
             <button
               key={w.id}
