@@ -663,11 +663,11 @@ function leafAndNodeHitTest(
     }
   }
 
-  // Then check nodes
+  // Then check nodes — only dot + shortHash area, not the whole row
   const row = Math.floor(worldY / ROW_HEIGHT);
   if (row >= 0 && row < tree.nodes.length) {
     const node = tree.nodes[row]!;
-    if (worldX >= node.x - 10 && worldX <= node.x + 400) {
+    if (worldX >= node.x - 6 && worldX <= node.x + 78) {
       return { type: "node", hash: node.hash };
     }
   }
