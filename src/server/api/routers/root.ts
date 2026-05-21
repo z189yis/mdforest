@@ -5,6 +5,7 @@ import { documentRouter } from "./document.router";
 import { bindingRouter } from "./binding.router";
 import { searchRouter } from "./search.router";
 import { wsRouter } from "./ws.router";
+import { collaborationRouter } from "./collaboration.router";
 
 export const appRouter = router({
   repo: repoRouter,
@@ -13,6 +14,7 @@ export const appRouter = router({
   binding: bindingRouter,
   search: searchRouter,
   ws: wsRouter,
+  collaboration: collaborationRouter,
   health: publicProcedure.query(() => "ok"),
 });
 

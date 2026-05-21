@@ -2,6 +2,8 @@ import { getServerSession } from "next-auth";
 import { initTRPC, TRPCError } from "@trpc/server";
 import { authOptions } from "@/server/auth";
 import { prisma } from "@/server/db/prisma";
+import { canAccessRepo, canAccessDocument } from "@/server/auth/permissions";
+import { z } from "zod";
 
 export const createTRPCContext = async () => {
   const session = await getServerSession(authOptions);
@@ -20,7 +22,6 @@ const isAuthed = middleware(async ({ ctx, next }) => {
   }
   const userId = ctx.session.user.id;
 
-  // Ensure user exists in database (needed for FK constraints)
   await ctx.prisma.user.upsert({
     where: { id: userId },
     update: {
@@ -40,3 +41,78 @@ const isAuthed = middleware(async ({ ctx, next }) => {
 });
 
 export const protectedProcedure = t.procedure.use(isAuthed);
+
+/**
+ * Require at least "read" access to a repo.
+ * Extracts repoId from input.
+ */
+const requireRepoRead = middleware(async ({ ctx, next, rawInput }) => {
+  const result = z.object({ repoId: z.string() }).passthrough().safeParse(rawInput);
+  if (!result.success) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "repoId required" });
+  }
+
+  const perm = await canAccessRepo(ctx.user.id, result.data.repoId);
+  if (perm === "none") {
+    throw new TRPCError({ code: "FORBIDDEN", message: "No access to this repository" });
+  }
+
+  return next({ ctx: { ...ctx, repoPermission: perm } });
+});
+
+/**
+ * Require at least "write" access to a repo.
+ */
+const requireRepoWrite = middleware(async ({ ctx, next, rawInput }) => {
+  const result = z.object({ repoId: z.string() }).passthrough().safeParse(rawInput);
+  if (!result.success) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "repoId required" });
+  }
+
+  const perm = await canAccessRepo(ctx.user.id, result.data.repoId);
+  if (perm !== "admin" && perm !== "write") {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Write access required" });
+  }
+
+  return next({ ctx: { ...ctx, repoPermission: perm } });
+});
+
+/**
+ * Require at least "read" access to a document.
+ * Extracts docId from input.
+ */
+const requireDocRead = middleware(async ({ ctx, next, rawInput }) => {
+  const result = z.object({ docId: z.string() }).passthrough().safeParse(rawInput);
+  if (!result.success) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "docId required" });
+  }
+
+  const perm = await canAccessDocument(ctx.user.id, result.data.docId);
+  if (perm === "none") {
+    throw new TRPCError({ code: "FORBIDDEN", message: "No access to this document" });
+  }
+
+  return next({ ctx: { ...ctx, docPermission: perm } });
+});
+
+/**
+ * Require at least "write" access to a document.
+ */
+const requireDocWrite = middleware(async ({ ctx, next, rawInput }) => {
+  const result = z.object({ docId: z.string() }).passthrough().safeParse(rawInput);
+  if (!result.success) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "docId required" });
+  }
+
+  const perm = await canAccessDocument(ctx.user.id, result.data.docId);
+  if (perm !== "admin" && perm !== "write") {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Write access required" });
+  }
+
+  return next({ ctx: { ...ctx, docPermission: perm } });
+});
+
+export const repoReadProcedure = t.procedure.use(isAuthed).use(requireRepoRead);
+export const repoWriteProcedure = t.procedure.use(isAuthed).use(requireRepoWrite);
+export const docReadProcedure = t.procedure.use(isAuthed).use(requireDocRead);
+export const docWriteProcedure = t.procedure.use(isAuthed).use(requireDocWrite);

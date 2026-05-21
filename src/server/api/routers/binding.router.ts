@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { protectedProcedure, router } from "@/server/api/trpc";
+import { protectedProcedure, repoWriteProcedure, router } from "@/server/api/trpc";
 
 export const bindingRouter = router({
   listForCommit: protectedProcedure
@@ -27,7 +27,7 @@ export const bindingRouter = router({
       return { success: true };
     }),
 
-  createAndBind: protectedProcedure
+  createAndBind: repoWriteProcedure
     .input(z.object({ commitId: z.string(), repoId: z.string(), title: z.string().min(1), content: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
       const filename = input.title.endsWith(".md") ? input.title : `${input.title}.md`;
@@ -48,7 +48,7 @@ export const bindingRouter = router({
     }),
 
   /** Create a document without binding (isolated leaf at a position) */
-  createIsolated: protectedProcedure
+  createIsolated: repoWriteProcedure
     .input(z.object({ repoId: z.string(), title: z.string().min(1), content: z.string().optional(), leafX: z.number(), leafY: z.number() }))
     .mutation(async ({ ctx, input }) => {
       const filename = input.title.endsWith(".md") ? input.title : `${input.title}.md`;
@@ -67,7 +67,7 @@ export const bindingRouter = router({
     }),
 
   /** Bind by commit hash instead of cache ID — used by drag-and-drop */
-  createAndBindByHash: protectedProcedure
+  createAndBindByHash: repoWriteProcedure
     .input(z.object({ repoId: z.string(), commitHash: z.string(), title: z.string().min(1), content: z.string().optional() }))
     .mutation(async ({ ctx, input }) => {
       const cache = await ctx.prisma.commitCache.findUnique({
