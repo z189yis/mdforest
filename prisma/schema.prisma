@@ -16,10 +16,12 @@ model User {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  accounts  Account[]
-  sessions  Session[]
-  repos     Repo[]
-  documents Document[]
+  accounts         Account[]
+  sessions         Session[]
+  repos            Repo[]
+  documents        Document[]
+  repoCollaborations  RepoCollaborator[]
+  docCollaborations   DocumentCollaborator[]
 }
 
 model Account {
@@ -70,9 +72,11 @@ model Repo {
   updatedAt     DateTime  @updatedAt
 
   ownerId     String
-  owner       User          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  documents   Document[]
-  commitCache CommitCache[]
+  owner         User               @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  documents     Document[]
+  commitCache   CommitCache[]
+  collaborators RepoCollaborator[]
+  inviteTokens  InviteToken[]
 }
 
 model CommitCache {
@@ -106,6 +110,9 @@ model Document {
   filePath  String?
   leafX     Float?
   leafY     Float?
+  isPublic  Boolean  @default(false)
+  lastSnapshot     Bytes?
+  snapshotVersion  Int     @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -114,7 +121,9 @@ model Document {
   ownerId String
   owner   User  @relation(fields: [ownerId], references: [id])
 
-  bindings CommitDocumentBinding[]
+  bindings         CommitDocumentBinding[]
+  collaborators    DocumentCollaborator[]
+  documentUpdates  DocumentUpdate[]
 
   @@index([repoId])
 }
@@ -131,4 +140,55 @@ model CommitDocumentBinding {
   @@unique([commitId, documentId])
   @@index([commitId])
   @@index([documentId])
+}
+
+model RepoCollaborator {
+  id       String   @id @default(cuid())
+  repoId   String
+  userId   String
+  role     String   @default("editor") // admin | editor | viewer
+  joinedAt DateTime @default(now())
+
+  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([repoId, userId])
+}
+
+model DocumentCollaborator {
+  id         String   @id @default(cuid())
+  documentId String
+  userId     String
+  role       String   @default("editor") // editor | viewer
+  joinedAt   DateTime @default(now())
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, userId])
+  @@index([userId])
+}
+
+model InviteToken {
+  id        String    @id @default(cuid())
+  repoId    String
+  token     String    @unique
+  role      String    @default("editor")
+  usedBy    String?
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+
+  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+}
+
+model DocumentUpdate {
+  id         String   @id @default(cuid())
+  documentId String
+  version    Int
+  data       Bytes                        // Yjs binary update (WAL)
+  createdAt  DateTime @default(now())
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId, version])
 }

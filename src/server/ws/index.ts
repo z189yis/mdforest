@@ -21,25 +21,24 @@ function readSyncMessage(
   decoder: decoding.Decoder,
   encoder: encoding.Encoder,
   doc: Y.Doc,
-): void {
+): boolean {
   const messageType = decoding.readVarUint(decoder);
   switch (messageType) {
     case 0: {
-      // Sync Step 1: client sends state vector, server responds with diff
       const sv = decoding.readVarUint8Array(decoder);
       const update = Y.encodeStateAsUpdate(doc, sv);
       encoding.writeVarUint(encoder, messageSync);
       encoding.writeVarUint(encoder, 1); // Sync Step 2
       encoding.writeVarUint8Array(encoder, update);
-      break;
+      return false;
     }
     case 1: {
-      // Client sends an update
       const update = decoding.readVarUint8Array(decoder);
       Y.applyUpdate(doc, update);
-      break;
+      return true;
     }
   }
+  return false;
 }
 
 function readAwarenessMessage(
@@ -153,7 +152,10 @@ wss.on("connection", (ws, _req) => {
 
           switch (messageType) {
             case messageSync: {
-              readSyncMessage(decoder, encoder, ydoc);
+              const hadUpdate = readSyncMessage(decoder, encoder, ydoc);
+              if (hadUpdate) {
+                roomManager.onUpdate(docId, ydoc);
+              }
               broadcastToRoom(docId, encoding.toUint8Array(encoder), ws);
               break;
             }

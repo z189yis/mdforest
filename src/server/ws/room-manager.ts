@@ -19,10 +19,19 @@ export interface RoomStats {
  */
 export class RoomManager {
   private rooms = new Map<string, RoomState>();
+  private updateCounts = new Map<string, number>();
+  private lastSnapshotTime = new Map<string, number>();
+  private snapshotVersion = new Map<string, number>();
+
+  private snapshotIntervalMs = parseInt(
+    process.env.SNAPSHOT_INTERVAL_MS ?? "30000",
+    10,
+  );
+  private snapshotUpdateThreshold = 100;
 
   constructor(
     private persistence: Persistence = new InMemoryPersistence(),
-    private maxRooms: number = parseInt(process.env.DOC_LRU_MAX ?? "100", 10)
+    private maxRooms: number = parseInt(process.env.DOC_LRU_MAX ?? "100", 10),
   ) {}
 
   /**
@@ -98,6 +107,38 @@ export class RoomManager {
    */
   evictUser(docId: string, userId: string): void {
     this.leave(docId, userId);
+  }
+
+  /**
+   * Record an update for auto-snapshot tracking.
+   * Called by the WS server after each client update is applied.
+   * Triggers a snapshot every 100 updates or 30s (whichever comes first).
+   */
+  async onUpdate(docId: string, ydoc: Y.Doc): Promise<void> {
+    const count = (this.updateCounts.get(docId) ?? 0) + 1;
+    this.updateCounts.set(docId, count);
+
+    const lastSnapshot = this.lastSnapshotTime.get(docId) ?? 0;
+    const now = Date.now();
+
+    if (
+      count >= this.snapshotUpdateThreshold ||
+      now - lastSnapshot >= this.snapshotIntervalMs
+    ) {
+      await this.takeSnapshot(docId, ydoc);
+      this.updateCounts.set(docId, 0);
+      this.lastSnapshotTime.set(docId, now);
+    }
+  }
+
+  /**
+   * Take a snapshot: persist state, clean old updates.
+   */
+  private async takeSnapshot(docId: string, ydoc: Y.Doc): Promise<void> {
+    const snapshot = Y.encodeStateAsUpdate(ydoc);
+    const version = (this.snapshotVersion.get(docId) ?? 0) + 1;
+    this.snapshotVersion.set(docId, version);
+    await this.persistence.saveSnapshot(docId, snapshot, version);
   }
 
   /**
