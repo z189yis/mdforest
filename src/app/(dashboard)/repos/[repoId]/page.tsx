@@ -174,9 +174,8 @@ export default function RepoTreePage() {
       </div>
 
       {/* Panels: Tree + Detail */}
-      <div className="flex-1 relative overflow-hidden">
-        <div className="h-full">
-          <ResizablePanels panels={panels}>
+      <div className="flex-1 relative overflow-hidden flex">
+        <ResizablePanels panels={panels}>
           {/* Left: Git Tree */}
           <div className="relative h-full">
             {repo.cloneStatus === "ready" ? (
@@ -237,7 +236,6 @@ export default function RepoTreePage() {
             )}
           </div>
         </ResizablePanels>
-        </div>
 
         {/* Floating MD Windows overlay */}
         {windows.map((w) => (
