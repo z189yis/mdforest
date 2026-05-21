@@ -16,6 +16,9 @@ export const documentRouter = router({
             { isPublic: true },
           ],
         },
+        include: {
+          _count: { select: { collaborators: true } },
+        },
         orderBy: { updatedAt: "desc" },
       });
     }),

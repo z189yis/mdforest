@@ -5,6 +5,10 @@ import { useState, useCallback, useEffect } from "react";
 import { trpc } from "@/lib/trpc/client";
 import { MarkdownEditor } from "@/components/editor/MarkdownEditor";
 import { MarkdownPreview } from "@/components/editor/MarkdownPreview";
+import { CollaborativeEditor } from "@/components/editor/CollaborativeEditor";
+import { useYjsProvider } from "@/lib/hooks/useYjsProvider";
+import { AvatarList } from "@/components/collaboration/AvatarList";
+import { ConflictToast } from "@/components/collaboration/ConflictToast";
 import { Button, Spinner } from "@/components/ui";
 import { toast } from "sonner";
 
@@ -17,6 +21,11 @@ export default function DocEditorPage() {
   const [title, setTitle] = useState("");
   const [showPreview, setShowPreview] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
+
+  const collabEnabled = process.env.NEXT_PUBLIC_COLLAB_ENABLED === "true";
+  const { ydoc, awareness, connectionStatus } = useYjsProvider(
+    collabEnabled ? docId : null
+  );
 
   const utils = trpc.useUtils();
   const updateDoc = trpc.document.update.useMutation({
@@ -39,8 +48,9 @@ export default function DocEditorPage() {
     updateDoc.mutate({ docId, content, title });
   }, [docId, content, title, updateDoc]);
 
-  // Ctrl+S to save
+  // Ctrl+S to save (only when not in collab mode)
   useEffect(() => {
+    if (collabEnabled) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === "s" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
@@ -49,7 +59,7 @@ export default function DocEditorPage() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [hasChanges, handleSave]);
+  }, [hasChanges, handleSave, collabEnabled]);
 
   if (isLoading) {
     return (
@@ -88,10 +98,22 @@ export default function DocEditorPage() {
             onChange={(e) => { setTitle(e.target.value); setHasChanges(true); }}
           />
           <span className="text-xs text-zinc-400">
-            {hasChanges ? "Unsaved changes" : "Saved"}
+            {collabEnabled
+              ? connectionStatus === "connected"
+                ? "Live"
+                : connectionStatus
+              : hasChanges
+                ? "Unsaved changes"
+                : "Saved"}
           </span>
         </div>
         <div className="flex items-center gap-2">
+          {collabEnabled && awareness && (
+            <>
+              <AvatarList awareness={awareness} />
+              <ConflictToast awareness={awareness} />
+            </>
+          )}
           <Button
             variant="secondary"
             size="sm"
@@ -99,14 +121,16 @@ export default function DocEditorPage() {
           >
             {showPreview ? "Edit" : "Preview"}
           </Button>
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={handleSave}
-            disabled={!hasChanges || updateDoc.isPending}
-          >
-            {updateDoc.isPending ? "Saving..." : "Save"}
-          </Button>
+          {!collabEnabled && (
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={handleSave}
+              disabled={!hasChanges || updateDoc.isPending}
+            >
+              {updateDoc.isPending ? "Saving..." : "Save"}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -114,6 +138,12 @@ export default function DocEditorPage() {
       <div className="flex-1 min-h-0">
         {showPreview ? (
           <MarkdownPreview content={content} />
+        ) : collabEnabled && ydoc && awareness ? (
+          <CollaborativeEditor
+            ydoc={ydoc}
+            awareness={awareness}
+            connectionStatus={connectionStatus}
+          />
         ) : (
           <MarkdownEditor
             value={content}

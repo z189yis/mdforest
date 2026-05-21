@@ -10,6 +10,8 @@ import { MarkdownEditor } from "@/components/editor/MarkdownEditor";
 import { MarkdownPreview } from "@/components/editor/MarkdownPreview";
 import { CollaborativeEditor } from "@/components/editor/CollaborativeEditor";
 import { useYjsProvider } from "@/lib/hooks/useYjsProvider";
+import { AvatarList } from "@/components/collaboration/AvatarList";
+import { ConflictToast } from "@/components/collaboration/ConflictToast";
 import { SearchBar } from "@/components/search/SearchBar";
 import { ResizablePanels } from "@/components/layout/ResizablePanels";
 import { Spinner } from "@/components/ui";
@@ -175,6 +177,12 @@ export default function RepoTreePage() {
                   <path d="M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 14c1.669 0 3.218.51 4.5 1.385A7.962 7.962 0 0114.5 14c1.255 0 2.443.29 3.5.804v-10A7.968 7.968 0 0014.5 4c-1.255 0-2.443.29-3.5.804V12a1 1 0 11-2 0V4.804z" />
                 </svg>
                 <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300 truncate">{selectedDoc.title}</span>
+                {collabEnabled && awareness && (
+                  <>
+                    <AvatarList awareness={awareness} />
+                    <ConflictToast awareness={awareness} currentUserName="You" />
+                  </>
+                )}
                 {!collabEnabled && (
                   <button onClick={() => saveDoc.mutate({ docId: selectedDoc.id, content: selectedDoc.content })}
                     className="ml-auto text-xs px-2 py-0.5 rounded bg-indigo-100 text-indigo-600 hover:bg-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-400 dark:hover:bg-indigo-900/50">
