@@ -4,25 +4,40 @@ const ROW_HEIGHT = 48;
 const COL_WIDTH = 28;
 const COL_MARGIN = 8;
 
-export function buildGitTree(entries: CommitEntry[]): GitTree {
+export interface TreeState {
+  columns: Record<string, number>;
+  branchColors: Record<string, number>;
+  activeBranches: string[];
+  nextColor: number;
+  nextRow: number;
+  maxColumn: number;
+}
+
+export function createTreeState(): TreeState {
+  return { columns: {}, branchColors: {}, activeBranches: [], nextColor: 0, nextRow: 0, maxColumn: 0 };
+}
+
+export function buildGitTree(entries: CommitEntry[], prevState?: TreeState): { tree: GitTree; state: TreeState } {
   if (entries.length === 0) {
-    return { nodes: [], edges: [], totalHeight: 0, totalWidth: 0, maxColumn: 0 };
+    const state = prevState ?? createTreeState();
+    return {
+      tree: { nodes: [], edges: [], totalHeight: 0, totalWidth: 0, maxColumn: state.maxColumn },
+      state,
+    };
   }
 
-  // Assign columns using a simple branch-tracking algorithm
+  const columns = new Map<string, number>(Object.entries(prevState?.columns ?? {}));
+  const branchColors = new Map<string, number>(Object.entries(prevState?.branchColors ?? {}));
+  const activeBranches: string[] = [...(prevState?.activeBranches ?? [])];
+  let nextColor = prevState?.nextColor ?? 0;
+  const startRow = prevState?.nextRow ?? 0;
+
   const hashToIndex = new Map<string, number>();
-  entries.forEach((e, i) => hashToIndex.set(e.hash, i));
+  entries.forEach((e, i) => hashToIndex.set(e.hash, startRow + i));
 
-  const columns = new Map<string, number>();
-  const branchColors = new Map<string, number>();
-  // Active branches: set of parent hashes that are still "open"
-  const activeBranches: string[] = [];
-  let nextColor = 0;
-
-  // First pass: assign column indices
-  // We track which "column" each commit occupies based on active branches
+  // Column assignment
   for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i];
+    const entry = entries[i]!;
 
     // Remove this commit from active branches (it's being "closed")
     const activeIdx = activeBranches.indexOf(entry.hash);
@@ -30,20 +45,17 @@ export function buildGitTree(entries: CommitEntry[]): GitTree {
       activeBranches.splice(activeIdx, 1);
     }
 
-    // Assign column: use the first available column, or create a new one
-    let col = 0;
-    // If this commit has parents, place it in one of the parent's columns
-    // Otherwise, find the leftmost free column
+    // Assign column
+    let col: number;
     if (columns.has(entry.hash)) {
       col = columns.get(entry.hash)!;
     } else {
-      // Find a free column
-      col = findFreeColumn(activeBranches, columns, entries, i);
+      col = findFreeColumn(activeBranches, columns);
     }
 
     columns.set(entry.hash, col);
 
-    // Get color for this branch
+    // Color
     if (!branchColors.has(entry.hash)) {
       branchColors.set(entry.hash, nextColor++);
     }
@@ -53,11 +65,9 @@ export function buildGitTree(entries: CommitEntry[]): GitTree {
       if (!activeBranches.includes(parentHash)) {
         activeBranches.push(parentHash);
       }
-      // Parent inherits the column or gets a neighboring one
       if (!columns.has(parentHash)) {
         columns.set(parentHash, col);
       }
-      // Inherit color
       if (!branchColors.has(parentHash)) {
         branchColors.set(parentHash, branchColors.get(entry.hash) ?? nextColor++);
       }
@@ -65,10 +75,11 @@ export function buildGitTree(entries: CommitEntry[]): GitTree {
   }
 
   // Build nodes
-  let maxColumn = 0;
-  const nodes: GitTreeNode[] = entries.map((entry, row) => {
+  let maxColumn = prevState?.maxColumn ?? 0;
+  const nodes: GitTreeNode[] = entries.map((entry, i) => {
     const col = columns.get(entry.hash) ?? 0;
     if (col > maxColumn) maxColumn = col;
+    const row = startRow + i;
 
     const branches: string[] = [];
     const tags: string[] = [];
@@ -99,7 +110,7 @@ export function buildGitTree(entries: CommitEntry[]): GitTree {
     };
   });
 
-  // Build edges
+  // Build edges (only among entries in this batch)
   const edges: GitTreeEdge[] = [];
   for (const entry of entries) {
     const fromIdx = hashToIndex.get(entry.hash);
@@ -120,37 +131,33 @@ export function buildGitTree(entries: CommitEntry[]): GitTree {
     }
   }
 
-  const totalHeight = entries.length * ROW_HEIGHT;
+  const totalHeight = (startRow + entries.length) * ROW_HEIGHT;
   const totalWidth = (maxColumn + 1) * (COL_WIDTH + COL_MARGIN) + 300;
 
-  return { nodes, edges, totalHeight, totalWidth, maxColumn };
+  const state: TreeState = {
+    columns: Object.fromEntries(columns),
+    branchColors: Object.fromEntries(branchColors),
+    activeBranches,
+    nextColor,
+    nextRow: startRow + entries.length,
+    maxColumn,
+  };
+
+  return {
+    tree: { nodes, edges, totalHeight, totalWidth, maxColumn },
+    state,
+  };
 }
 
-function findFreeColumn(
-  activeBranches: string[],
-  columns: Map<string, number>,
-  entries: CommitEntry[],
-  currentIdx: number
-): number {
-  // Check upcoming entries to see which columns will be needed
+function findFreeColumn(activeBranches: string[], columns: Map<string, number>): number {
   const usedCols = new Set<number>();
   for (const hash of activeBranches) {
     const col = columns.get(hash);
     if (col !== undefined) usedCols.add(col);
   }
-  // Also check current entry's parents
-  const entry = entries[currentIdx];
-  if (entry) {
-    for (const ph of entry.parentHashes) {
-      const col = columns.get(ph);
-      if (col !== undefined) usedCols.add(col);
-    }
-  }
 
-  // If no columns used, start at 0
   if (usedCols.size === 0) return 0;
 
-  // Find leftmost free column
   const maxUsed = Math.max(...usedCols);
   for (let c = 0; c <= maxUsed + 1; c++) {
     if (!usedCols.has(c)) return c;

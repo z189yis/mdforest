@@ -41,9 +41,12 @@ interface GitTreeCanvasProps {
   onDocClick?: (docId: string) => void;
   onFileDrop?: (hash: string | null, fileName: string, content: string, leafX: number, leafY: number) => void;
   onLeafPositionChange?: (docId: string, leafX: number, leafY: number) => void;
+  onNeedMore?: () => void;
+  hasMore?: boolean;
+  isFetchingMore?: boolean;
 }
 
-export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick, onDocClick, onFileDrop, onLeafPositionChange }: GitTreeCanvasProps) {
+export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick, onDocClick, onFileDrop, onLeafPositionChange, onNeedMore, hasMore, isFetchingMore }: GitTreeCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number>(0);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -100,6 +103,9 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
     canvas.height = canvasSize.height * dpr;
     ctx.scale(dpr, dpr);
 
+    // Lazy-load throttle
+    let lastNeedMoreTime = 0;
+
     const render = () => {
       const target = targetExpandRef.current;
       const current = currentExpandRef.current;
@@ -117,11 +123,25 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
         currentExpandRef.current,
         dirtyLeafPositionsRef.current
       );
+
+      // Detect scroll near bottom → trigger lazy load
+      if (hasMore && onNeedMore && !isFetchingMore && tree.nodes.length > 0) {
+        const invZoom = 1 / transform.zoom;
+        const endRow = Math.min(
+          tree.nodes.length - 1,
+          Math.ceil((canvasSize.height - transform.offsetY) * invZoom / ROW_HEIGHT) + 2
+        );
+        if (endRow >= tree.nodes.length - 10 && Date.now() - lastNeedMoreTime > 600) {
+          lastNeedMoreTime = Date.now();
+          onNeedMore();
+        }
+      }
+
       rafRef.current = requestAnimationFrame(render);
     };
     render();
     return () => cancelAnimationFrame(rafRef.current);
-  }, [tree, transform, canvasSize, dragHash, docLeaves]);
+  }, [tree, transform, canvasSize, dragHash, docLeaves, hasMore, onNeedMore, isFetchingMore]);
 
   // ---- Interaction handlers ----
 
@@ -313,6 +333,16 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
       {dragOver && (
         <div className="absolute top-2 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg bg-indigo-500 text-white text-xs font-medium z-10 pointer-events-none">
           Drop .md file {dragHash ? "to link to commit" : "as isolated leaf"}
+        </div>
+      )}
+      {isFetchingMore && (
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-full bg-zinc-800/80 text-zinc-300 text-xs z-10 pointer-events-none">
+          Loading more commits...
+        </div>
+      )}
+      {hasMore === false && tree && tree.nodes.length > 0 && (
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-zinc-200/60 dark:bg-zinc-800/40 text-zinc-500 text-xs z-10 pointer-events-none">
+          All commits loaded
         </div>
       )}
       <canvas

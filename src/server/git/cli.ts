@@ -27,15 +27,24 @@ export function runAsync(args: string[], cwd: string): Promise<{ stdout: string;
   });
 }
 
-export async function gitLogAll(repoPath: string): Promise<CommitEntry[]> {
+export async function gitLogAll(repoPath: string, skip = 0, take = 200): Promise<CommitEntry[]> {
   try {
     const output = await run(
-      ["log", "--all", "--format=%H|%P|%an|%ae|%aI|%s|%D", "--topo-order"],
+      ["log", "--all", `--skip=${skip}`, `-n${take}`, "--format=%H|%P|%an|%ae|%aI|%s|%D", "--topo-order"],
       repoPath
     );
     return parseLogOutput(output);
   } catch {
     return [];
+  }
+}
+
+export async function gitCommitCount(repoPath: string): Promise<number> {
+  try {
+    const output = await run(["rev-list", "--count", "--all"], repoPath);
+    return parseInt(output.trim(), 10) || 0;
+  } catch {
+    return 0;
   }
 }
 
