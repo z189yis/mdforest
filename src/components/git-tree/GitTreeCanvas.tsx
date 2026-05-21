@@ -185,19 +185,27 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
       }
 
       // Normal hover
-      const hit = leafAndNodeHitTest(world.x, world.y, tree, docLeavesRef.current, dirtyLeafPositionsRef.current);
-      if (hit?.type === "leaf") {
+      const hit = preciseHitTest(world.x, world.y, tree, docLeavesRef.current, dirtyLeafPositionsRef.current);
+      if (hit?.type === "leaf" || hit?.type === "leaf-connection") {
         hoveredLeafIdRef.current = hit.leafId;
-        hoveredHashRef.current = hit.hash;
+        hoveredHashRef.current = hit.type === "leaf-connection" ? hit.hash : (hit as any).hash;
         setHoveredLeafId(hit.leafId);
-        setHoveredHash(hit.hash);
+        setHoveredHash(hit.type === "leaf-connection" ? hit.hash : (hit as any).hash);
         targetExpandRef.current = 0;
-      } else if (hit?.type === "node") {
+      } else if (hit?.type === "node-dot" || hit?.type === "node-id") {
         hoveredHashRef.current = hit.hash;
         hoveredLeafIdRef.current = null;
         setHoveredHash(hit.hash);
         setHoveredLeafId(null);
         targetExpandRef.current = 24;
+      } else if (hit?.type === "edge") {
+        // Hovering an edge: highlight it + connected nodes
+        const edge = tree.edges[hit.edgeIdx]!;
+        hoveredHashRef.current = edge.fromHash;
+        hoveredLeafIdRef.current = null;
+        setHoveredHash(edge.fromHash);
+        setHoveredLeafId(null);
+        targetExpandRef.current = 0;
       } else {
         hoveredHashRef.current = null;
         hoveredLeafIdRef.current = null;
@@ -277,8 +285,9 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
       const rect = canvasRef.current.getBoundingClientRect();
       const world = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
 
-      const hit = leafAndNodeHitTest(world.x, world.y, tree, docLeavesRef.current, dirtyLeafPositionsRef.current);
-      const hash = hit?.type === "node" ? hit.hash : null;
+      const hit = preciseHitTest(world.x, world.y, tree, docLeavesRef.current, dirtyLeafPositionsRef.current);
+      const hash = (hit?.type === "node-dot" || hit?.type === "node-id" || hit?.type === "edge")
+        ? hit.hash : null;
       dragHashRef.current = hash;
       setDragHash(hash);
       setDragOver(true);
@@ -678,31 +687,115 @@ function computeLeafPositions(
   return positions;
 }
 
-function leafAndNodeHitTest(
+// ============================================================================
+//  Precise hit testing — per-element (dot, id, leaf, edge, connection)
+// ============================================================================
+
+const EDGE_HIT_DIST = 6;     // px threshold for curve proximity
+const HASH_CHAR_W = 6.6;     // approx width of 11px monospace char
+
+type HitResult =
+  | { type: "node-dot"; hash: string }
+  | { type: "node-id"; hash: string }
+  | { type: "leaf"; leafId: string; hash: string | null }
+  | { type: "edge"; edgeIdx: number }
+  | { type: "leaf-connection"; leafId: string; hash: string }
+  | null;
+
+function preciseHitTest(
   worldX: number, worldY: number,
   tree: GitTree,
   docLeaves: DocLeavesData | undefined,
   dirtyPositions: Map<string, LeafPosition>
-): { type: "leaf"; leafId: string; hash: string | null } | { type: "node"; hash: string } | null {
-  // Check leaves first (they should take priority for click)
+): HitResult {
+  // 1. Leaf icons (ellipse test — highest visual priority)
   const leafPositions = computeLeafPositions(tree, docLeaves, dirtyPositions);
   for (const [leafId, pos] of leafPositions) {
-    if (Math.abs(worldX - pos.x) < LEAF_HIT_RADIUS && Math.abs(worldY - pos.y) < LEAF_HIT_RADIUS) {
+    const dx = (worldX - pos.x) / 7;  // rx=7 when highlighted
+    const dy = (worldY - pos.y) / 5;  // ry=5 when highlighted
+    if (dx * dx + dy * dy <= 1) {
       const leaf = docLeaves?.leafMap[leafId];
       return { type: "leaf", leafId, hash: leaf?.connectedHashes[0] ?? null };
     }
   }
 
-  // Then check nodes — only dot + shortHash area, not the whole row
-  const row = Math.floor(worldY / ROW_HEIGHT);
-  if (row >= 0 && row < tree.nodes.length) {
-    const node = tree.nodes[row]!;
-    if (worldX >= node.x - 6 && worldX <= node.x + 78) {
-      return { type: "node", hash: node.hash };
+  // 2. Node dots (circle test)
+  for (const node of tree.nodes) {
+    const dotX = node.x + 5;
+    const dotY = node.y + ROW_HEIGHT / 2;
+    if (Math.hypot(worldX - dotX, worldY - dotY) <= 6) {
+      return { type: "node-dot", hash: node.hash };
+    }
+  }
+
+  // 3. Node IDs — shortHash text bounding box
+  for (const node of tree.nodes) {
+    const textX = node.x + 14;
+    const textW = 7 * HASH_CHAR_W + 2; // ~48px
+    const textTop = node.y + ROW_HEIGHT / 2 - 8;
+    const textBottom = node.y + ROW_HEIGHT / 2 + 6;
+    if (worldX >= textX && worldX <= textX + textW && worldY >= textTop && worldY <= textBottom) {
+      return { type: "node-id", hash: node.hash };
+    }
+  }
+
+  // 4. Commit-to-commit edges (bezier proximity)
+  for (let i = 0; i < tree.edges.length; i++) {
+    const edge = tree.edges[i]!;
+    if (edge.fromRow >= tree.nodes.length || edge.toRow >= tree.nodes.length) continue;
+    const from = tree.nodes[edge.fromRow]!;
+    const to = tree.nodes[edge.toRow]!;
+    const x1 = from.x + 4, y1 = from.y + ROW_HEIGHT / 2;
+    const x2 = to.x + 4,   y2 = to.y + ROW_HEIGHT / 2;
+    const midY = (y1 + y2) / 2;
+
+    if (Math.abs(x1 - x2) < 4) {
+      // Straight vertical line
+      if (Math.abs(worldX - x1) < EDGE_HIT_DIST && worldY >= Math.min(y1, y2) && worldY <= Math.max(y1, y2)) {
+        return { type: "edge", edgeIdx: i };
+      }
+    } else {
+      // Bezier curve: (x1,y1) → (x1,midY) → (x2,midY) → (x2,y2)
+      const d = pointToBezierDist(worldX, worldY, x1, y1, x1, midY, x2, midY, x2, y2);
+      if (d < EDGE_HIT_DIST) return { type: "edge", edgeIdx: i };
+    }
+  }
+
+  // 5. Leaf-to-commit connections (bezier from commit dot to leaf)
+  if (docLeaves) {
+    for (const [leafId, leafPos] of leafPositions) {
+      const leaf = docLeaves.leafMap[leafId];
+      if (!leaf || leaf.connectedHashes.length === 0) continue;
+      for (const hash of leaf.connectedHashes) {
+        const node = tree.nodes.find(n => n.hash === hash);
+        if (!node) continue;
+        const nx = node.x + 5, ny = node.y + ROW_HEIGHT / 2;
+        const midX = (nx + leafPos.x) / 2;
+        const midY = (ny + leafPos.y) / 2;
+        const d = pointToBezierDist(worldX, worldY, nx, ny, midX, ny - 12, midX, leafPos.y + 12, leafPos.x, leafPos.y);
+        if (d < EDGE_HIT_DIST) return { type: "leaf-connection", leafId, hash };
+      }
     }
   }
 
   return null;
+}
+
+/** Sample 24 points along a cubic bezier, return minimum distance to (px,py) */
+function pointToBezierDist(
+  px: number, py: number,
+  x1: number, y1: number, cx1: number, cy1: number, cx2: number, cy2: number, x2: number, y2: number
+): number {
+  let min = Infinity;
+  for (let i = 0; i <= 24; i++) {
+    const t = i / 24;
+    const u = 1 - t;
+    const bx = u*u*u*x1 + 3*u*u*t*cx1 + 3*u*t*t*cx2 + t*t*t*x2;
+    const by = u*u*u*y1 + 3*u*u*t*cy1 + 3*u*t*t*cy2 + t*t*t*y2;
+    const d = Math.hypot(px - bx, py - by);
+    if (d < min) min = d;
+  }
+  return min;
 }
 
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
