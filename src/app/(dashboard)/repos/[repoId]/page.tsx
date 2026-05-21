@@ -174,8 +174,9 @@ export default function RepoTreePage() {
       </div>
 
       {/* Panels: Tree + Detail */}
-      <div className="flex-1 relative overflow-hidden flex">
-        <ResizablePanels panels={panels}>
+      <div className="flex-1 min-h-0 flex flex-col">
+        <div className="flex-1 min-h-0">
+          <ResizablePanels panels={panels}>
           {/* Left: Git Tree */}
           <div className="relative h-full">
             {repo.cloneStatus === "ready" ? (
@@ -236,42 +237,43 @@ export default function RepoTreePage() {
             )}
           </div>
         </ResizablePanels>
-
-        {/* Floating MD Windows overlay */}
-        {windows.map((w) => (
-          <MDWindow
-            key={w.id}
-            window={w}
-            onMove={(x, y) => updatePosition(w.id, x, y)}
-            onResize={(width, height) => updateSize(w.id, width, height)}
-            onFocus={() => focusWindow(w.id)}
-            onClose={() => closeWindow(w.id)}
-            onMinimize={() => minimizeWindow(w.id)}
-            collabEnabled={collabEnabled}
-            ydoc={collabEnabled && w.id === focusedWindow?.id ? ydoc : undefined}
-            awareness={collabEnabled && w.id === focusedWindow?.id ? awareness : undefined}
-            connectionStatus={collabEnabled && w.id === focusedWindow?.id ? connectionStatus : undefined}
-          />
-        ))}
-
-        {/* Minimized window tabs */}
-        {minimizedWindows.length > 0 && (
-          <div className="absolute bottom-0 left-0 right-0 flex gap-1 px-2 py-1 bg-zinc-100 dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-700">
-            {minimizedWindows.map((w) => (
-              <button
-                key={w.id}
-                onClick={() => restoreWindow(w.id)}
-                className="text-xs px-2 py-0.5 rounded bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-700 truncate max-w-[160px]"
-              >
-                <svg className="h-3 w-3 text-green-500 inline mr-1" fill="currentColor" viewBox="0 0 20 20">
-                  <path d="M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 14c1.669 0 3.218.51 4.5 1.385A7.962 7.962 0 0114.5 14c1.255 0 2.443.29 3.5.804v-10A7.968 7.968 0 0014.5 4c-1.255 0-2.443.29-3.5.804V12a1 1 0 11-2 0V4.804z" />
-                </svg>
-                {w.title}
-              </button>
-            ))}
-          </div>
-        )}
+        </div>
       </div>
+
+      {/* Floating MD Windows — render as fixed overlay outside flex layout */}
+      {windows.map((w) => (
+        <MDWindow
+          key={w.id}
+          window={w}
+          onMove={(x, y) => updatePosition(w.id, x, y)}
+          onResize={(width, height) => updateSize(w.id, width, height)}
+          onFocus={() => focusWindow(w.id)}
+          onClose={() => closeWindow(w.id)}
+          onMinimize={() => minimizeWindow(w.id)}
+          collabEnabled={collabEnabled}
+          ydoc={collabEnabled && w.id === focusedWindow?.id ? ydoc : undefined}
+          awareness={collabEnabled && w.id === focusedWindow?.id ? awareness : undefined}
+          connectionStatus={collabEnabled && w.id === focusedWindow?.id ? connectionStatus : undefined}
+        />
+      ))}
+
+      {/* Minimized window tabs */}
+      {minimizedWindows.length > 0 && (
+        <div className="fixed bottom-0 left-0 right-0 flex gap-1 px-2 py-1 bg-zinc-100 dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-700 z-50">
+          {minimizedWindows.map((w) => (
+            <button
+              key={w.id}
+              onClick={() => restoreWindow(w.id)}
+              className="text-xs px-2 py-0.5 rounded bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-700 truncate max-w-[160px]"
+            >
+              <svg className="h-3 w-3 text-green-500 inline mr-1" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 14c1.669 0 3.218.51 4.5 1.385A7.962 7.962 0 0114.5 14c1.255 0 2.443.29 3.5.804v-10A7.968 7.968 0 0014.5 4c-1.255 0-2.443.29-3.5.804V12a1 1 0 11-2 0V4.804z" />
+              </svg>
+              {w.title}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
