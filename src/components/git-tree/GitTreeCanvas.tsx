@@ -440,8 +440,8 @@ function drawFrame(
     const from = tree.nodes[edge.fromRow], to = tree.nodes[edge.toRow];
     if (!from || !to) continue;
 
-    const fromY = from.y + (edge.fromRow > hoveredRow ? effectiveExpand : 0) + (edge.fromRow === hoveredRow ? effectiveExpand * 0.5 : 0);
-    const toY = to.y + (edge.toRow > hoveredRow ? effectiveExpand : 0) + (edge.toRow === hoveredRow ? effectiveExpand * 0.5 : 0);
+    const fromY = from.y + (edge.fromRow > hoveredRow ? effectiveExpand : 0);
+    const toY = to.y + (edge.toRow > hoveredRow ? effectiveExpand : 0);
 
     const c = BRANCH_COLORS[edge.fromColumn % BRANCH_COLORS.length]!;
     const isConnected = connectedEdges.has(i);
@@ -474,7 +474,7 @@ function drawFrame(
         const node = tree.nodes.find(n => n.hash === hash);
         if (!node) continue;
 
-        const ny = node.y + (node.row > hoveredRow ? effectiveExpand : 0) + ROW_HEIGHT / 2 + (node.row === hoveredRow ? effectiveExpand * 0.5 : 0);
+        const ny = node.y + (node.row > hoveredRow ? effectiveExpand : 0) + ROW_HEIGHT / 2;
         drawLeafConnection(ctx, node.x + 5, ny, pos.x, pos.y, highlightConn);
       }
     }
