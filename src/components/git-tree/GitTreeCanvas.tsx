@@ -44,13 +44,13 @@ interface GitTreeCanvasProps {
   onNeedMore?: () => void;
   hasMore?: boolean;
   isFetchingMore?: boolean;
+  showTimeAlways?: boolean;
 }
 
-export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick, onDocClick, onFileDrop, onLeafPositionChange, onNeedMore, hasMore, isFetchingMore }: GitTreeCanvasProps) {
+export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick, onDocClick, onFileDrop, onLeafPositionChange, onNeedMore, hasMore, isFetchingMore, showTimeAlways }: GitTreeCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number>(0);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
   const [dragHash, setDragHash] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const dragHashRef = useRef<string | null>(null);
@@ -66,6 +66,7 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
   const draggingLeafRef = useRef<string | null>(null);
   const dragOffsetRef = useRef({ x: 0, y: 0 });
   const dirtyLeafPositionsRef = useRef<Map<string, LeafPosition>>(new Map());
+  const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null);
 
   // Expand animation
   const targetExpandRef = useRef(0);
@@ -76,32 +77,17 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
   docLeavesRef.current = docLeaves;
   const treeRef = useRef<GitTree | undefined>(tree);
   treeRef.current = tree;
+  const showTimeAlwaysRef = useRef(showTimeAlways);
+  showTimeAlwaysRef.current = showTimeAlways;
 
   const { transform, handleMouseDown, handleMouseMove, handleMouseUp, handleWheel, screenToWorld } =
     useViewportController({ initialOffsetX: 160, initialOffsetY: 40 });
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const { width, height } = entry.contentRect;
-        setCanvasSize({ width: Math.max(width, 100), height: Math.max(height, 100) });
-      }
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !tree) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = canvasSize.width * dpr;
-    canvas.height = canvasSize.height * dpr;
-    ctx.scale(dpr, dpr);
 
     // Lazy-load throttle
     let lastNeedMoreTime = 0;
@@ -116,12 +102,22 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
         currentExpandRef.current = target;
       }
 
+      const dpr = window.devicePixelRatio || 1;
+      const cw = canvas.clientWidth;
+      const ch = canvas.clientHeight;
+      if (canvas.width !== cw * dpr || canvas.height !== ch * dpr) {
+        canvas.width = cw * dpr;
+        canvas.height = ch * dpr;
+        ctx.scale(dpr, dpr);
+      }
+
       drawFrame(
-        ctx, tree, transform, canvasSize.width, canvasSize.height,
+        ctx, tree, transform, cw, ch,
         dragHash, docLeaves,
         hoveredHashRef.current, hoveredLeafIdRef.current,
         currentExpandRef.current,
-        dirtyLeafPositionsRef.current
+        dirtyLeafPositionsRef.current,
+        showTimeAlwaysRef.current
       );
 
       // Detect scroll near bottom → trigger lazy load
@@ -129,7 +125,7 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
         const invZoom = 1 / transform.zoom;
         const endRow = Math.min(
           tree.nodes.length - 1,
-          Math.ceil((canvasSize.height - transform.offsetY) * invZoom / ROW_HEIGHT) + 2
+          Math.ceil((ch - transform.offsetY) * invZoom / ROW_HEIGHT) + 2
         );
         if (endRow >= tree.nodes.length - 10 && Date.now() - lastNeedMoreTime > 600) {
           lastNeedMoreTime = Date.now();
@@ -141,7 +137,7 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
     };
     render();
     return () => cancelAnimationFrame(rafRef.current);
-  }, [tree, transform, canvasSize, dragHash, docLeaves, hasMore, onNeedMore, isFetchingMore]);
+  }, [tree, transform, dragHash, docLeaves, hasMore, onNeedMore, isFetchingMore]);
 
   // ---- Interaction handlers ----
 
@@ -152,6 +148,7 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
       const world = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
 
       // Check if clicking on a leaf (for drag)
+      mouseDownPosRef.current = { x: e.clientX, y: e.clientY };
       const leafPositions = computeLeafPositions(tree, docLeavesRef.current, dirtyLeafPositionsRef.current);
       for (const [leafId, pos] of leafPositions) {
         if (Math.abs(world.x - pos.x) < LEAF_HIT_RADIUS && Math.abs(world.y - pos.y) < LEAF_HIT_RADIUS) {
@@ -199,11 +196,10 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
         setHoveredLeafId(null);
         targetExpandRef.current = 24;
       } else if (hit?.type === "edge") {
-        // Hovering an edge: highlight it + connected nodes
-        const edge = tree.edges[hit.edgeIdx]!;
-        hoveredHashRef.current = edge.fromHash;
+        // Hovering an edge: no highlight
+        hoveredHashRef.current = null;
         hoveredLeafIdRef.current = null;
-        setHoveredHash(edge.fromHash);
+        setHoveredHash(null);
         setHoveredLeafId(null);
         targetExpandRef.current = 0;
       } else {
@@ -253,6 +249,13 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
       if (!tree || !canvasRef.current) return;
+      // Ignore click if the mouse moved since mousedown (i.e. it was a drag, not a click)
+      if (mouseDownPosRef.current) {
+        const dx = e.clientX - mouseDownPosRef.current.x;
+        const dy = e.clientY - mouseDownPosRef.current.y;
+        mouseDownPosRef.current = null;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) return;
+      }
       const rect = canvasRef.current.getBoundingClientRect();
       const world = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
 
@@ -356,8 +359,7 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
       )}
       <canvas
         ref={canvasRef}
-        style={{ width: canvasSize.width, height: canvasSize.height }}
-        className="block"
+        className="block w-full h-full"
         onClick={handleClick}
         onMouseDown={handleCanvasMouseDown}
         onMouseMove={handleCanvasMouseMove}
@@ -379,7 +381,8 @@ function drawFrame(
   hoveredHash?: string | null,
   hoveredLeafId?: string | null,
   expandOffset?: number,
-  dirtyLeafPositions?: Map<string, LeafPosition>
+  dirtyLeafPositions?: Map<string, LeafPosition>,
+  showTimeAlways?: boolean
 ) {
   ctx.clearRect(0, 0, canvasW, canvasH);
   ctx.save();
@@ -454,7 +457,7 @@ function drawFrame(
     if (i > hoveredRow) effectiveY += effectiveExpand;
 
     const isHovered = i === hoveredRow;
-    drawCommitNode(ctx, node, effectiveY, highlightHash === node.hash, isHovered, worldWidth, isHovered ? effectiveExpand : 0);
+    drawCommitNode(ctx, node, effectiveY, highlightHash === node.hash, isHovered, worldWidth, isHovered ? effectiveExpand : 0, showTimeAlways);
   }
 
   // 3. Leaf-to-commit connection lines
@@ -499,7 +502,8 @@ function drawCommitNode(
   highlight: boolean,
   isHovered: boolean,
   worldWidth: number,
-  expandOffset: number
+  expandOffset: number,
+  showTimeAlways?: boolean
 ) {
   const x = node.x;
   const y = effectiveY;
@@ -516,11 +520,13 @@ function drawCommitNode(
     ctx.beginPath(); roundRect(ctx, x - 4, y + 2, 400, rowHeight - 4, 6); ctx.fill();
   }
 
-  // Date on the left
-  const dateStr = formatDate(node.authorDate);
-  ctx.font = "10px 'Cascadia Code', monospace";
-  ctx.fillStyle = isHovered ? "#a5b4fc" : "#666";
-  ctx.fillText(dateStr, x + DATE_X_OFFSET, y + 18);
+  // Date on the left — only when hovering or toggle enabled
+  if (showTimeAlways || isHovered) {
+    const dateStr = formatDate(node.authorDate);
+    ctx.font = "10px 'Cascadia Code', monospace";
+    ctx.fillStyle = isHovered ? "#a5b4fc" : "#666";
+    ctx.fillText(dateStr, x + DATE_X_OFFSET, y + 18);
+  }
 
   // Dot — larger on hover
   const dotR = isHovered ? 5 : 4;

@@ -23,6 +23,7 @@ export default function RepoTreePage() {
   const { data: docLeaves } = trpc.git.docLeaves.useQuery({ repoId });
 
   const [branch, setBranch] = useState<string | undefined>(undefined);
+  const [showTimeAlways, setShowTimeAlways] = useState(false);
   const { tree, isLoading: treeLoading, error: treeError, refetch: refetchTree, fetchMore, hasMore, isFetchingMore, totalCount } = useGitTree(repoId, branch);
 
   const [selectedCommitHash, setSelectedCommitHash] = useState<string | null>(null);
@@ -169,6 +170,16 @@ export default function RepoTreePage() {
         {totalCount > 0 && <span className="text-xs text-zinc-400">{tree ? tree.nodes.length : 0}/{totalCount} commits</span>}
 
         <div className="ml-auto flex items-center gap-2">
+          <label className="flex items-center gap-1.5 text-xs text-zinc-500 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={showTimeAlways}
+              onChange={(e) => setShowTimeAlways(e.target.checked)}
+              className="peer sr-only"
+            />
+            <span className="w-7 h-4 rounded-full bg-zinc-300 dark:bg-zinc-600 peer-checked:bg-indigo-500 relative transition-colors after:absolute after:top-0.5 after:left-0.5 after:w-3 after:h-3 after:rounded-full after:bg-white after:transition-transform peer-checked:after:translate-x-3" />
+            Date
+          </label>
           <SearchBar repoId={repoId} />
         </div>
       </div>
@@ -190,6 +201,7 @@ export default function RepoTreePage() {
                   onNeedMore={fetchMore}
                   hasMore={hasMore}
                   isFetchingMore={isFetchingMore}
+                  showTimeAlways={showTimeAlways}
                 />
                 {collabEnabled && awareness && (
                   <ViewportIndicator
