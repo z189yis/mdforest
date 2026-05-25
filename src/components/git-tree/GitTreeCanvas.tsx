@@ -4,6 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { GitTree, ROW_HEIGHT } from "@/server/git/tree-builder";
 import { useViewportController, ViewportTransform } from "@/lib/hooks/useViewportController";
 import { Spinner } from "@/components/ui";
+import type { MemoryMarker } from "@/lib/hooks/useMemoryMarkers";
+import { MEMORY_GLYPHS } from "@/lib/hooks/useMemoryMarkers";
+import type { MemoryMarkerType } from "@/lib/hooks/useMemoryMarkers";
 
 const BRANCH_COLORS = [
   "#6366f1", "#ec4899", "#14b8a6", "#f59e0b", "#8b5cf6",
@@ -32,13 +35,18 @@ type DocLeavesData = {
 
 type LeafPosition = { x: number; y: number };
 
+const MARKER_X_OFFSET = 200;  // X offset from commit for the first memory marker
+const MARKER_SPACING = 14;   // spacing between markers on the same row
+
 interface GitTreeCanvasProps {
   tree?: GitTree;
   isLoading: boolean;
   error?: unknown;
   docLeaves?: DocLeavesData;
+  memoryMarkers?: MemoryMarker[];
   onCommitClick: (hash: string) => void;
   onDocClick?: (docId: string) => void;
+  onMemoryClick?: (memoryId: string) => void;
   onFileDrop?: (hash: string | null, fileName: string, content: string, leafX: number, leafY: number) => void;
   onLeafPositionChange?: (docId: string, leafX: number, leafY: number) => void;
   onNeedMore?: () => void;
@@ -47,7 +55,7 @@ interface GitTreeCanvasProps {
   showTimeAlways?: boolean;
 }
 
-export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick, onDocClick, onFileDrop, onLeafPositionChange, onNeedMore, hasMore, isFetchingMore, showTimeAlways }: GitTreeCanvasProps) {
+export function GitTreeCanvas({ tree, isLoading, error, docLeaves, memoryMarkers, onCommitClick, onDocClick, onMemoryClick, onFileDrop, onLeafPositionChange, onNeedMore, hasMore, isFetchingMore, showTimeAlways }: GitTreeCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number>(0);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -58,8 +66,10 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
   // Hover state
   const [hoveredHash, setHoveredHash] = useState<string | null>(null);
   const [hoveredLeafId, setHoveredLeafId] = useState<string | null>(null);
+  const [hoveredMemoryId, setHoveredMemoryId] = useState<string | null>(null);
   const hoveredHashRef = useRef<string | null>(null);
   const hoveredLeafIdRef = useRef<string | null>(null);
+  const hoveredMemoryIdRef = useRef<string | null>(null);
 
   // Leaf drag state
   const [draggingLeafId, setDraggingLeafId] = useState<string | null>(null);
@@ -79,6 +89,8 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
   treeRef.current = tree;
   const showTimeAlwaysRef = useRef(showTimeAlways);
   showTimeAlwaysRef.current = showTimeAlways;
+  const memoryMarkersRef = useRef<MemoryMarker[] | undefined>(memoryMarkers);
+  memoryMarkersRef.current = memoryMarkers;
 
   const { transform, handleMouseDown, handleMouseMove, handleMouseUp, handleWheel, screenToWorld } =
     useViewportController({ initialOffsetX: 160, initialOffsetY: 40 });
@@ -117,7 +129,9 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
         hoveredHashRef.current, hoveredLeafIdRef.current,
         currentExpandRef.current,
         dirtyLeafPositionsRef.current,
-        showTimeAlwaysRef.current
+        showTimeAlwaysRef.current,
+        memoryMarkersRef.current,
+        hoveredMemoryIdRef.current
       );
 
       // Detect scroll near bottom → trigger lazy load
@@ -137,7 +151,7 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
     };
     render();
     return () => cancelAnimationFrame(rafRef.current);
-  }, [tree, transform, dragHash, docLeaves, hasMore, onNeedMore, isFetchingMore]);
+  }, [tree, transform, dragHash, docLeaves, memoryMarkers, hasMore, onNeedMore, isFetchingMore]);
 
   // ---- Interaction handlers ----
 
@@ -182,8 +196,16 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
       }
 
       // Normal hover
-      const hit = preciseHitTest(world.x, world.y, tree, docLeavesRef.current, dirtyLeafPositionsRef.current);
-      if (hit?.type === "leaf" || hit?.type === "leaf-connection") {
+      const hit = preciseHitTest(world.x, world.y, tree, docLeavesRef.current, dirtyLeafPositionsRef.current, memoryMarkersRef.current);
+      if (hit?.type === "memory-marker") {
+        hoveredMemoryIdRef.current = hit.memoryId;
+        hoveredHashRef.current = null;
+        hoveredLeafIdRef.current = null;
+        setHoveredMemoryId(hit.memoryId);
+        setHoveredHash(null);
+        setHoveredLeafId(null);
+        targetExpandRef.current = 0;
+      } else if (hit?.type === "leaf" || hit?.type === "leaf-connection") {
         hoveredLeafIdRef.current = hit.leafId;
         hoveredHashRef.current = hit.type === "leaf-connection" ? hit.hash : (hit as any).hash;
         setHoveredLeafId(hit.leafId);
@@ -192,21 +214,27 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
       } else if (hit?.type === "node-dot" || hit?.type === "node-id") {
         hoveredHashRef.current = hit.hash;
         hoveredLeafIdRef.current = null;
+        hoveredMemoryIdRef.current = null;
         setHoveredHash(hit.hash);
         setHoveredLeafId(null);
+        setHoveredMemoryId(null);
         targetExpandRef.current = 24;
       } else if (hit?.type === "edge") {
         // Hovering an edge: no highlight
         hoveredHashRef.current = null;
         hoveredLeafIdRef.current = null;
+        hoveredMemoryIdRef.current = null;
         setHoveredHash(null);
         setHoveredLeafId(null);
+        setHoveredMemoryId(null);
         targetExpandRef.current = 0;
       } else {
         hoveredHashRef.current = null;
         hoveredLeafIdRef.current = null;
+        hoveredMemoryIdRef.current = null;
         setHoveredHash(null);
         setHoveredLeafId(null);
+        setHoveredMemoryId(null);
         targetExpandRef.current = 0;
       }
     },
@@ -241,8 +269,10 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
     setDraggingLeafId(null);
     hoveredHashRef.current = null;
     hoveredLeafIdRef.current = null;
+    hoveredMemoryIdRef.current = null;
     setHoveredHash(null);
     setHoveredLeafId(null);
+    setHoveredMemoryId(null);
     targetExpandRef.current = 0;
   }, [onLeafPositionChange]);
 
@@ -259,7 +289,14 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
       const rect = canvasRef.current.getBoundingClientRect();
       const world = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
 
-      // Check leaf click first
+      // Check memory marker click first (above leaf icons)
+      const hit = preciseHitTest(world.x, world.y, tree, docLeavesRef.current, dirtyLeafPositionsRef.current, memoryMarkersRef.current);
+      if (hit?.type === "memory-marker") {
+        onMemoryClick?.(hit.memoryId);
+        return;
+      }
+
+      // Check leaf click
       const leafPositions = computeLeafPositions(tree, docLeavesRef.current, dirtyLeafPositionsRef.current);
       for (const [leafId, pos] of leafPositions) {
         if (Math.abs(world.x - pos.x) < LEAF_HIT_RADIUS && Math.abs(world.y - pos.y) < LEAF_HIT_RADIUS) {
@@ -288,7 +325,7 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
       const rect = canvasRef.current.getBoundingClientRect();
       const world = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
 
-      const hit = preciseHitTest(world.x, world.y, tree, docLeavesRef.current, dirtyLeafPositionsRef.current);
+      const hit = preciseHitTest(world.x, world.y, tree, docLeavesRef.current, dirtyLeafPositionsRef.current, memoryMarkersRef.current);
       const hash = (hit?.type === "node-dot" || hit?.type === "node-id" || hit?.type === "edge")
         ? hit.hash : null;
       dragHashRef.current = hash;
@@ -382,7 +419,9 @@ function drawFrame(
   hoveredLeafId?: string | null,
   expandOffset?: number,
   dirtyLeafPositions?: Map<string, LeafPosition>,
-  showTimeAlways?: boolean
+  showTimeAlways?: boolean,
+  memoryMarkers?: MemoryMarker[],
+  hoveredMemoryId?: string | null
 ) {
   ctx.clearRect(0, 0, canvasW, canvasH);
   ctx.save();
@@ -490,6 +529,11 @@ function drawFrame(
       const highlight = isLeafHovered || isConnectedToHoveredNode;
       drawLeafIcon(ctx, pos.x, pos.y, leaf.title, highlight, worldWidth > 400 || highlight);
     }
+  }
+
+  // 5. Memory markers
+  if (memoryMarkers && memoryMarkers.length > 0) {
+    drawMemoryMarkers(ctx, tree, memoryMarkers, hoveredHash, hoveredMemoryId, effectiveExpand, worldWidth, startRow, endRow);
   }
 
   ctx.restore();
@@ -628,6 +672,138 @@ function drawLeafIcon(
   }
 }
 
+// ============================================================================
+//  Memory markers
+// ============================================================================
+
+interface MarkerPosition {
+  id: string;
+  type: MemoryMarkerType;
+  x: number;
+  y: number;
+  confidence: number;
+  source: string;
+  summary: string | null;
+}
+
+function computeMarkerPositions(
+  tree: GitTree,
+  markers: MemoryMarker[],
+  expandOffset: number,
+  hoveredRow: number
+): MarkerPosition[] {
+  const positions: MarkerPosition[] = [];
+  const rowCounters = new Map<number, number>();
+
+  for (const marker of markers) {
+    let row = -1;
+
+    // Find row for linked commit
+    if (marker.commitHash) {
+      const nodeIdx = tree.nodes.findIndex((n) => n.hash === marker.commitHash);
+      if (nodeIdx >= 0) row = nodeIdx;
+    }
+
+    // Unlinked markers: attach to first visible row if not found
+    if (row < 0) {
+      // Position at the top of visible area (using first node as reference)
+      if (tree.nodes.length > 0) {
+        row = 0;
+      } else {
+        continue;
+      }
+    }
+
+    const node = tree.nodes[row];
+    if (!node) continue;
+
+    const effectiveY = node.y + (row > hoveredRow ? expandOffset : 0) + ROW_HEIGHT / 2;
+    const counter = rowCounters.get(row) ?? 0;
+    rowCounters.set(row, counter + 1);
+
+    positions.push({
+      id: marker.id,
+      type: marker.type as MemoryMarkerType,
+      x: node.x + MARKER_X_OFFSET + counter * MARKER_SPACING,
+      y: effectiveY,
+      confidence: marker.confidence,
+      source: marker.source,
+      summary: marker.summary,
+    });
+  }
+
+  return positions;
+}
+
+function drawMemoryMarkers(
+  ctx: CanvasRenderingContext2D,
+  tree: GitTree,
+  markers: MemoryMarker[],
+  hoveredHash: string | null,
+  hoveredMemoryId: string | null,
+  expandOffset: number,
+  worldWidth: number,
+  startRow: number,
+  endRow: number
+) {
+  const hoveredRow = hoveredHash ? tree.nodes.findIndex((n) => n.hash === hoveredHash) : -1;
+  const positions = computeMarkerPositions(tree, markers, expandOffset, hoveredRow);
+
+  for (const pos of positions) {
+    // Only render markers in visible rows
+    const markerRow = tree.nodes.findIndex((n) => {
+      const nodeY = n.y + (n.row > hoveredRow ? expandOffset : 0) + ROW_HEIGHT / 2;
+      return Math.abs(nodeY - pos.y) < ROW_HEIGHT / 2;
+    });
+    // Always show markers linked to commits (pos is on the row)
+
+    const glyph = MEMORY_GLYPHS[pos.type] ?? MEMORY_GLYPHS.fact;
+    const isHovered = hoveredMemoryId === pos.id;
+
+    // Source-based opacity
+    let alpha: number;
+    switch (pos.source) {
+      case "user": alpha = 1.0; break;
+      case "agent": alpha = 0.85; break;
+      case "tool": alpha = 0.7; break;
+      case "inferred": alpha = 0.5; break;
+      default: alpha = 0.85;
+    }
+
+    if (isHovered) alpha = 1.0;
+
+    ctx.globalAlpha = alpha;
+
+    // Glow on hover
+    if (isHovered) {
+      ctx.beginPath();
+      ctx.arc(pos.x, pos.y, 10, 0, Math.PI * 2);
+      ctx.fillStyle = glyph.color + "30";
+      ctx.fill();
+    }
+
+    // Draw glyph
+    const fontSize = isHovered ? 14 : 11;
+    ctx.font = `${fontSize}px Inter, sans-serif`;
+    ctx.fillStyle = glyph.color;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(glyph.glyph, pos.x, pos.y);
+    ctx.textAlign = "start";
+    ctx.textBaseline = "alphabetic";
+
+    // Show label on hover or when zoomed in
+    if (isHovered && pos.summary) {
+      ctx.font = "10px Inter, sans-serif";
+      ctx.fillStyle = isHovered ? "#d4d4d8" : "#888";
+      const label = pos.summary.length > 20 ? pos.summary.substring(0, 20) + "\u2026" : pos.summary;
+      ctx.fillText(label, pos.x + 8, pos.y - 3);
+    }
+
+    ctx.globalAlpha = 1;
+  }
+}
+
 function drawCurve(
   ctx: CanvasRenderingContext2D,
   x1: number, y1: number,
@@ -706,13 +882,15 @@ type HitResult =
   | { type: "leaf"; leafId: string; hash: string | null }
   | { type: "edge"; edgeIdx: number }
   | { type: "leaf-connection"; leafId: string; hash: string }
+  | { type: "memory-marker"; memoryId: string }
   | null;
 
 function preciseHitTest(
   worldX: number, worldY: number,
   tree: GitTree,
   docLeaves: DocLeavesData | undefined,
-  dirtyPositions: Map<string, LeafPosition>
+  dirtyPositions: Map<string, LeafPosition>,
+  memoryMarkers?: MemoryMarker[]
 ): HitResult {
   // 1. Leaf icons (ellipse test — highest visual priority)
   const leafPositions = computeLeafPositions(tree, docLeaves, dirtyPositions);
@@ -725,7 +903,18 @@ function preciseHitTest(
     }
   }
 
-  // 2. Node dots (circle test)
+  // 2. Memory markers (glyph hit test — above node dots)
+  if (memoryMarkers && memoryMarkers.length > 0) {
+    const markerPositions = computeMarkerPositions(tree, memoryMarkers, 0, -1);
+    for (const pos of markerPositions) {
+      const markerDist = Math.hypot(worldX - pos.x, worldY - pos.y);
+      if (markerDist <= 8) {
+        return { type: "memory-marker", memoryId: pos.id };
+      }
+    }
+  }
+
+  // 3. Node dots (circle test)
   for (const node of tree.nodes) {
     const dotX = node.x + 5;
     const dotY = node.y + ROW_HEIGHT / 2;
@@ -734,7 +923,7 @@ function preciseHitTest(
     }
   }
 
-  // 3. Node IDs — shortHash text bounding box
+  // 4. Node IDs — shortHash text bounding box
   for (const node of tree.nodes) {
     const textX = node.x + 14;
     const textW = 7 * HASH_CHAR_W + 2; // ~48px
@@ -745,7 +934,7 @@ function preciseHitTest(
     }
   }
 
-  // 4. Commit-to-commit edges (bezier proximity)
+  // 5. Commit-to-commit edges (bezier proximity)
   for (let i = 0; i < tree.edges.length; i++) {
     const edge = tree.edges[i]!;
     if (edge.fromRow >= tree.nodes.length || edge.toRow >= tree.nodes.length) continue;
@@ -767,7 +956,7 @@ function preciseHitTest(
     }
   }
 
-  // 5. Leaf-to-commit connections (bezier from commit dot to leaf)
+  // 6. Leaf-to-commit connections (bezier from commit dot to leaf)
   if (docLeaves) {
     for (const [leafId, leafPos] of leafPositions) {
       const leaf = docLeaves.leafMap[leafId];

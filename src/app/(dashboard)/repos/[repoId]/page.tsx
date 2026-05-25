@@ -5,8 +5,10 @@ import { useState, useCallback, useMemo } from "react";
 import { trpc } from "@/lib/trpc/client";
 import { useGitTree } from "@/lib/hooks/useGitTree";
 import { useWindowManager } from "@/lib/hooks/useWindowManager";
+import { useMemoryMarkers } from "@/lib/hooks/useMemoryMarkers";
 import { GitTreeCanvas } from "@/components/git-tree/GitTreeCanvas";
 import { CommitDetailPanel } from "@/components/commit-detail/CommitDetailPanel";
+import { MemoryDetailPanel } from "@/components/memory/MemoryDetailPanel";
 import { MDWindow } from "@/components/editor/MDWindow";
 import { useYjsProvider } from "@/lib/hooks/useYjsProvider";
 import { useCollaborativeLeaves } from "@/lib/hooks/useCollaborativeLeaves";
@@ -27,6 +29,10 @@ export default function RepoTreePage() {
   const { tree, isLoading: treeLoading, error: treeError, refetch: refetchTree, fetchMore, hasMore, isFetchingMore, totalCount } = useGitTree(repoId, branch);
 
   const [selectedCommitHash, setSelectedCommitHash] = useState<string | null>(null);
+  const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(null);
+
+  // Memory markers
+  const { markers: memoryMarkers } = useMemoryMarkers(repoId);
 
   // Window manager for MD documents
   const {
@@ -92,7 +98,14 @@ export default function RepoTreePage() {
     onError: (err) => toast.error(err.message),
   });
 
-  const handleCommitClick = useCallback((hash: string) => setSelectedCommitHash(hash), []);
+  const handleCommitClick = useCallback((hash: string) => {
+    setSelectedCommitHash(hash);
+    setSelectedMemoryId(null);
+  }, []);
+  const handleMemoryClick = useCallback((memoryId: string) => {
+    setSelectedMemoryId(memoryId);
+    setSelectedCommitHash(null);
+  }, []);
 
   // Open doc in a floating window
   const handleDocClick = useCallback(
@@ -194,8 +207,10 @@ export default function RepoTreePage() {
                 <GitTreeCanvas
                   tree={tree} isLoading={treeLoading} error={treeError}
                   docLeaves={docLeaves}
+                  memoryMarkers={memoryMarkers}
                   onCommitClick={handleCommitClick}
                   onDocClick={handleDocClick}
+                  onMemoryClick={handleMemoryClick}
                   onFileDrop={handleFileDrop}
                   onLeafPositionChange={handleLeafPositionChange}
                   onNeedMore={fetchMore}
@@ -221,7 +236,7 @@ export default function RepoTreePage() {
             )}
           </div>
 
-          {/* Right: Commit Detail */}
+          {/* Right: Commit / Memory Detail */}
           <div className="h-full overflow-auto bg-white dark:bg-zinc-950">
             {selectedCommitHash ? (
               <div className="p-4 space-y-4">
@@ -241,9 +256,22 @@ export default function RepoTreePage() {
                   }}
                 />
               </div>
+            ) : selectedMemoryId ? (
+              <div className="p-4 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Memory Detail</h4>
+                  <button onClick={() => setSelectedMemoryId(null)}
+                    className="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">✕</button>
+                </div>
+                <MemoryDetailPanel
+                  memoryId={selectedMemoryId}
+                  repoId={repoId}
+                  onClose={() => setSelectedMemoryId(null)}
+                />
+              </div>
             ) : (
               <div className="flex items-center justify-center h-full text-zinc-400 text-sm">
-                Click a commit node to see details
+                Click a commit to see details, or a marker to see memory
               </div>
             )}
           </div>

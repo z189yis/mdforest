@@ -6,6 +6,7 @@ import { bindingRouter } from "./binding.router";
 import { searchRouter } from "./search.router";
 import { wsRouter } from "./ws.router";
 import { collaborationRouter } from "./collaboration.router";
+import { memoryRouter } from "./memory.router";
 
 export const appRouter = router({
   repo: repoRouter,
@@ -15,6 +16,7 @@ export const appRouter = router({
   search: searchRouter,
   ws: wsRouter,
   collaboration: collaborationRouter,
+  memory: memoryRouter,
   health: publicProcedure.query(() => "ok"),
 });
 
