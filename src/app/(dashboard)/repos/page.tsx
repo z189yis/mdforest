@@ -7,7 +7,14 @@ import { AddRepoForm } from "@/components/repo/AddRepoForm";
 import { EmptyState, Spinner } from "@/components/ui";
 
 export default function ReposPage() {
-  const { data: repos, isLoading, error } = trpc.repo.list.useQuery();
+  const { data: repos, isLoading, error } = trpc.repo.list.useQuery(undefined, {
+    // Poll while any repo is still cloning/pending
+    refetchInterval: (query) => {
+      const list = query.state.data;
+      if (!list) return false;
+      return list.some((r) => r.cloneStatus === "pending" || r.cloneStatus === "cloning") ? 5000 : false;
+    },
+  });
 
   return (
     <div className="max-w-4xl mx-auto p-6 space-y-6">

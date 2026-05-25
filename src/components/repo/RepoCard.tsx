@@ -1,9 +1,9 @@
 import { Card, Badge } from "@/components/ui";
 import { Repo } from "@prisma/client";
 
-const statusColors: Record<string, "default" | "indigo" | "green" | "red"> = {
-  pending: "default",
-  cloning: "yellow",
+const statusColors: Record<string, "default" | "indigo" | "green" | "red" | "yellow" | "blue"> = {
+  pending: "yellow",
+  cloning: "blue",
   ready: "green",
   error: "red",
 };

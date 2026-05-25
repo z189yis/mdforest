@@ -2,7 +2,30 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createMemory } from "@/server/memory/store";
 import { embed } from "@/server/memory/embed";
+import { prisma } from "@/server/db/prisma";
 import { getUserId, getRepoId } from "../auth";
+
+/**
+ * 尝试通过 commitHash 解析真实的数据库 repoId。
+ * 如果 commit 存在于 CommitCache 中，返回其 repoId。
+ * 否则回退到 MD_FOREST_REPO_ID 环境变量。
+ */
+async function resolveRepoId(commitHash?: string): Promise<string> {
+  if (commitHash) {
+    try {
+      const commit = await prisma.commitCache.findFirst({
+        where: { commitHash },
+        select: { repoId: true },
+      });
+      if (commit) {
+        return commit.repoId;
+      }
+    } catch {
+      // CommitCache 可能为空或未初始化，回退到 env
+    }
+  }
+  return getRepoId();
+}
 
 export function registerAddMemory(server: McpServer) {
   server.registerTool(
@@ -64,7 +87,7 @@ You SHOULD call this whenever you make a design decision or learn something impo
     },
     async (input) => {
       const userId = getUserId();
-      const repoId = getRepoId();
+      const repoId = await resolveRepoId(input.commitHash);
 
       const [embedding] = await embed([
         input.summary ?? input.content,

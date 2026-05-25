@@ -215,6 +215,9 @@ model MemoryEntry {
   accessCount Int      @default(0)
   lastAccessedAt DateTime?
 
+  markerX    Float?
+  markerY    Float?
+
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

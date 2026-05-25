@@ -63,7 +63,7 @@ export async function createMemory(
 
     if (row.length > 0) {
       await tx.$executeRawUnsafe(
-        "INSERT INTO memory_fts(rowid, content, summary) VALUES (?, ?, ?)",
+        "INSERT OR REPLACE INTO memory_fts(rowid, content, summary) VALUES (?, ?, ?)",
         row[0]!.rowid,
         content,
         input.summary ?? ""

@@ -8,7 +8,7 @@ import { useWindowManager } from "@/lib/hooks/useWindowManager";
 import { useMemoryMarkers } from "@/lib/hooks/useMemoryMarkers";
 import { GitTreeCanvas } from "@/components/git-tree/GitTreeCanvas";
 import { CommitDetailPanel } from "@/components/commit-detail/CommitDetailPanel";
-import { MemoryDetailPanel } from "@/components/memory/MemoryDetailPanel";
+import { MemoryWindow } from "@/components/memory/MemoryWindow";
 import { MDWindow } from "@/components/editor/MDWindow";
 import { useYjsProvider } from "@/lib/hooks/useYjsProvider";
 import { useCollaborativeLeaves } from "@/lib/hooks/useCollaborativeLeaves";
@@ -20,7 +20,25 @@ import { toast } from "sonner";
 
 export default function RepoTreePage() {
   const { repoId } = useParams<{ repoId: string }>();
-  const { data: repo, isLoading, error } = trpc.repo.get.useQuery({ repoId });
+  const utils = trpc.useUtils();
+  const { data: repo, isLoading, error } = trpc.repo.get.useQuery(
+    { repoId },
+    {
+      // Poll every 3s while cloning/pending, stop when ready or error
+      refetchInterval: (query) => {
+        const status = query.state.data?.cloneStatus;
+        return status === "pending" || status === "cloning" ? 3000 : false;
+      },
+    }
+  );
+
+  const retryClone = trpc.repo.retryClone.useMutation({
+    onSuccess: () => {
+      toast.success("Retrying clone...");
+      utils.repo.get.invalidate({ repoId });
+    },
+    onError: (err) => toast.error(err.message),
+  });
   const { data: branches } = trpc.git.branches.useQuery({ repoId });
   const { data: docLeaves } = trpc.git.docLeaves.useQuery({ repoId });
 
@@ -29,7 +47,6 @@ export default function RepoTreePage() {
   const { tree, isLoading: treeLoading, error: treeError, refetch: refetchTree, fetchMore, hasMore, isFetchingMore, totalCount } = useGitTree(repoId, branch);
 
   const [selectedCommitHash, setSelectedCommitHash] = useState<string | null>(null);
-  const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(null);
 
   // Memory markers
   const { markers: memoryMarkers } = useMemoryMarkers(repoId);
@@ -38,6 +55,7 @@ export default function RepoTreePage() {
   const {
     windows,
     open: openWindow,
+    openMemory,
     close: closeWindow,
     focus: focusWindow,
     minimize: minimizeWindow,
@@ -45,6 +63,9 @@ export default function RepoTreePage() {
     updateSize,
     restore: restoreWindow,
   } = useWindowManager();
+
+  const docWindows = useMemo(() => windows.filter((w) => w.kind !== "memory"), [windows]);
+  const memoryWindows = useMemo(() => windows.filter((w) => w.kind === "memory"), [windows]);
 
   // Collaborative editing (active window's doc)
   const collabEnabled = process.env.NEXT_PUBLIC_COLLAB_ENABLED === "true";
@@ -62,10 +83,21 @@ export default function RepoTreePage() {
     connectionStatus,
   } = useYjsProvider(collabEnabled ? (focusedWindow?.id ?? null) : null);
 
-  const utils = trpc.useUtils();
   const updateLeafPosition = trpc.document.updateLeafPosition.useMutation({
     onError: (err) => toast.error(err.message),
   });
+
+  const updateMarkerPosition = trpc.memory.updateMarkerPosition.useMutation({
+    onError: (err) => toast.error(err.message),
+  });
+
+  const handleMemoryPositionChange = useCallback(
+    (memoryId: string, markerX: number, markerY: number) => {
+      updateMarkerPosition.mutate({ repoId, memoryId, markerX, markerY });
+      utils.memory.markers.invalidate({ repoId });
+    },
+    [repoId, utils, updateMarkerPosition]
+  );
 
   const handleRemoteLeafChange = useCallback(
     (leafId: string, x: number, y: number) => {
@@ -100,12 +132,12 @@ export default function RepoTreePage() {
 
   const handleCommitClick = useCallback((hash: string) => {
     setSelectedCommitHash(hash);
-    setSelectedMemoryId(null);
   }, []);
   const handleMemoryClick = useCallback((memoryId: string) => {
-    setSelectedMemoryId(memoryId);
-    setSelectedCommitHash(null);
-  }, []);
+    // Open memory in floating window — same as md leaves
+    const marker = memoryMarkers.find((m) => m.id === memoryId);
+    openMemory(memoryId, marker?.summary ?? marker?.type ?? "Memory");
+  }, [memoryMarkers, openMemory]);
 
   // Open doc in a floating window
   const handleDocClick = useCallback(
@@ -178,7 +210,13 @@ export default function RepoTreePage() {
         )}
 
         {repo.cloneStatus !== "ready" && (
-          <span className="text-xs px-2 py-0.5 rounded bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400">{repo.cloneStatus}</span>
+          <span className={`text-xs px-2 py-0.5 rounded ${
+            repo.cloneStatus === "error"
+              ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+              : repo.cloneStatus === "cloning"
+              ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 animate-pulse"
+              : "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400"
+          }`}>{repo.cloneStatus}</span>
         )}
         {totalCount > 0 && <span className="text-xs text-zinc-400">{tree ? tree.nodes.length : 0}/{totalCount} commits</span>}
 
@@ -211,6 +249,7 @@ export default function RepoTreePage() {
                   onCommitClick={handleCommitClick}
                   onDocClick={handleDocClick}
                   onMemoryClick={handleMemoryClick}
+                  onMemoryPositionChange={handleMemoryPositionChange}
                   onFileDrop={handleFileDrop}
                   onLeafPositionChange={handleLeafPositionChange}
                   onNeedMore={fetchMore}
@@ -229,8 +268,38 @@ export default function RepoTreePage() {
             ) : (
               <div className="flex items-center justify-center h-full">
                 <div className="text-center text-zinc-500">
-                  <Spinner className="mx-auto mb-3" />
-                  <p className="text-sm">{repo.cloneStatus === "error" ? `Clone failed: ${repo.cloneError ?? "?"}` : "Cloning..."}</p>
+                  {repo.cloneStatus === "cloning" ? (
+                    <>
+                      <Spinner className="mx-auto mb-3" />
+                      <p className="text-sm">Cloning repository...</p>
+                      <p className="text-xs text-zinc-400 mt-1">This may take a while for large repos</p>
+                    </>
+                  ) : repo.cloneStatus === "error" ? (
+                    <>
+                      <p className="text-sm text-red-600 dark:text-red-400 mb-2">
+                        Clone failed: {repo.cloneError ?? "Unknown error"}
+                      </p>
+                      <button
+                        onClick={() => retryClone.mutate({ repoId })}
+                        disabled={retryClone.isPending}
+                        className="text-xs px-3 py-1.5 rounded bg-indigo-500 text-white hover:bg-indigo-600 disabled:opacity-50 transition-colors"
+                      >
+                        {retryClone.isPending ? "Retrying..." : "Retry Clone"}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <Spinner className="mx-auto mb-3" />
+                      <p className="text-sm">Waiting for clone to start...</p>
+                      <button
+                        onClick={() => retryClone.mutate({ repoId })}
+                        disabled={retryClone.isPending}
+                        className="text-xs mt-3 px-3 py-1.5 rounded bg-indigo-500 text-white hover:bg-indigo-600 disabled:opacity-50 transition-colors"
+                      >
+                        {retryClone.isPending ? "Retrying..." : "Retry Clone"}
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             )}
@@ -256,29 +325,16 @@ export default function RepoTreePage() {
                   }}
                 />
               </div>
-            ) : selectedMemoryId ? (
-              <div className="p-4 space-y-4">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Memory Detail</h4>
-                  <button onClick={() => setSelectedMemoryId(null)}
-                    className="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">✕</button>
-                </div>
-                <MemoryDetailPanel
-                  memoryId={selectedMemoryId}
-                  repoId={repoId}
-                  onClose={() => setSelectedMemoryId(null)}
-                />
-              </div>
             ) : (
               <div className="flex items-center justify-center h-full text-zinc-400 text-sm">
-                Click a commit to see details, or a marker to see memory
+                Click a commit to see details, or a memory marker to open it
               </div>
             )}
           </div>
         </ResizablePanels>
 
         {/* Floating MD Windows overlay */}
-        {windows.map((w) => (
+        {docWindows.map((w) => (
         <MDWindow
           key={w.id}
           window={w}
@@ -294,6 +350,20 @@ export default function RepoTreePage() {
         />
       ))}
 
+        {/* Floating Memory Windows overlay */}
+        {memoryWindows.map((w) => (
+          <MemoryWindow
+            key={w.id}
+            window={w}
+            repoId={repoId}
+            onMove={(x, y) => updatePosition(w.id, x, y)}
+            onResize={(width, height) => updateSize(w.id, width, height)}
+            onFocus={() => focusWindow(w.id)}
+            onClose={() => closeWindow(w.id)}
+            onMinimize={() => minimizeWindow(w.id)}
+          />
+        ))}
+
       {/* Minimized window tabs */}
       {minimizedWindows.length > 0 && (
         <div className="absolute bottom-0 left-0 right-0 flex gap-1 px-2 py-1 bg-zinc-100 dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-700">
@@ -303,7 +373,7 @@ export default function RepoTreePage() {
               onClick={() => restoreWindow(w.id)}
               className="text-xs px-2 py-0.5 rounded bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-700 truncate max-w-[160px]"
             >
-              <svg className="h-3 w-3 text-green-500 inline mr-1" fill="currentColor" viewBox="0 0 20 20">
+              <svg className={`h-3 w-3 inline mr-1 ${w.kind === "memory" ? "text-purple-500" : "text-green-500"}`} fill="currentColor" viewBox="0 0 20 20">
                 <path d="M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 14c1.669 0 3.218.51 4.5 1.385A7.962 7.962 0 0114.5 14c1.255 0 2.443.29 3.5.804v-10A7.968 7.968 0 0014.5 4c-1.255 0-2.443.29-3.5.804V12a1 1 0 11-2 0V4.804z" />
               </svg>
               {w.title}

@@ -11,6 +11,8 @@ export interface MemoryMarker {
   confidence: number;
   source: string;
   commitHash: string | null;
+  markerX: number | null;
+  markerY: number | null;
   createdAt: Date;
 }
 
