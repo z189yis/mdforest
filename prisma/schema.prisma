@@ -22,6 +22,7 @@ model User {
   documents        Document[]
   repoCollaborations  RepoCollaborator[]
   docCollaborations   DocumentCollaborator[]
+  memoryEntries    MemoryEntry[]
 }
 
 model Account {
@@ -77,6 +78,7 @@ model Repo {
   commitCache   CommitCache[]
   collaborators RepoCollaborator[]
   inviteTokens  InviteToken[]
+  memoryEntries MemoryEntry[]
 }
 
 model CommitCache {
@@ -124,6 +126,7 @@ model Document {
   bindings         CommitDocumentBinding[]
   collaborators    DocumentCollaborator[]
   documentUpdates  DocumentUpdate[]
+  memoryEntries    MemoryEntry[]
 
   @@index([repoId])
 }
@@ -191,4 +194,37 @@ model DocumentUpdate {
   document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
   @@index([documentId, version])
+}
+
+model MemoryEntry {
+  id          String   @id @default(cuid())
+  type        String   // fact | preference | event | procedure | decision
+  content     String
+  summary     String?
+  confidence  Float    @default(1.0)
+  source      String   @default("agent") // user | agent | tool | inferred
+  provenance  String?
+  embedding   String?  // JSON-encoded float array for vector search
+
+  repoId      String
+  commitHash  String?
+  documentId  String?
+
+  userId      String
+
+  accessCount Int      @default(0)
+  lastAccessedAt DateTime?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  repo     Repo         @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  user     User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  document Document?    @relation(fields: [documentId], references: [id])
+
+  // commitHash is a loose reference — the referenced commit may not be in CommitCache yet
+  // No FK constraint so memories can be linked to any commit hash
+
+  @@index([repoId, commitHash])
+  @@index([userId, type])
 }
