@@ -99,6 +99,7 @@ export default function RepoTreePage() {
     [repoId, utils, updateMarkerPosition]
   );
 
+
   const handleRemoteLeafChange = useCallback(
     (leafId: string, x: number, y: number) => {
       updateLeafPosition.mutate({ docId: leafId, leafX: x, leafY: y });
