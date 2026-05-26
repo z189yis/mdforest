@@ -14,13 +14,21 @@ export async function cloneRepo(
   onProgress: (status: string, error?: string) => Promise<void>
 ): Promise<void> {
   const localPath = getRepoPath(repoId);
-  fs.mkdirSync(localPath, { recursive: true });
+
+  // Clean up stale directory if it exists from a previous failed clone
+  if (fs.existsSync(localPath)) {
+    fs.rmSync(localPath, { recursive: true, force: true });
+  }
+
+  // Ensure parent directory exists (e.g. data/repos/)
+  const parentDir = path.dirname(localPath);
+  fs.mkdirSync(parentDir, { recursive: true });
 
   try {
     await onProgress("cloning");
 
-    // Full clone to get all branches and history
-    await execGit(["clone", remoteUrl, localPath]);
+    // git clone creates the target directory — must NOT exist beforehand
+    await execGit(["clone", "--no-tags", remoteUrl, localPath]);
 
     // Fetch all branches
     await execGit(["fetch", "--all"], localPath);
@@ -28,6 +36,7 @@ export async function cloneRepo(
     await onProgress("ready");
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Unknown clone error";
+    console.error(`[clone] Failed for repo ${repoId}: ${message}`);
     await onProgress("error", message);
   }
 }
@@ -37,7 +46,12 @@ function execGit(args: string[], cwd?: string): Promise<void> {
     const child = spawn("git", args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: 300_000,
+      timeout: 300_000, // 5 minutes
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: "0",  // Disable password prompts that would hang forever
+        GCM_INTERACTIVE: "Never",   // Disable Git Credential Manager interactive mode
+      },
     });
 
     let stderr = "";

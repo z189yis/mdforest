@@ -2,9 +2,12 @@
 
 import { useState, useCallback } from "react";
 
+export type WindowKind = "doc" | "memory";
+
 export interface WindowState {
-  id: string; // docId
+  id: string;
   title: string;
+  kind: WindowKind;
   x: number;
   y: number;
   width: number;
@@ -16,6 +19,7 @@ export interface WindowState {
 interface UseWindowManagerReturn {
   windows: WindowState[];
   open: (docId: string, title: string) => void;
+  openMemory: (memoryId: string, title: string) => void;
   close: (docId: string) => void;
   focus: (docId: string) => void;
   minimize: (docId: string) => void;
@@ -26,8 +30,10 @@ interface UseWindowManagerReturn {
 
 const DEFAULT_WIDTH = 520;
 const DEFAULT_HEIGHT = 420;
-const MIN_WIDTH = 300;
-const MIN_HEIGHT = 200;
+const MEMORY_DEFAULT_WIDTH = 400;
+const MEMORY_DEFAULT_HEIGHT = 320;
+const MIN_WIDTH = 260;
+const MIN_HEIGHT = 180;
 
 let nextZIndex = 100;
 
@@ -38,7 +44,6 @@ export function useWindowManager(): UseWindowManagerReturn {
     setWindows((prev) => {
       const existing = prev.find((w) => w.id === docId);
       if (existing) {
-        // Already open: un-minimize and bring to front
         const newZ = ++nextZIndex;
         return prev.map((w) =>
           w.id === docId
@@ -46,20 +51,50 @@ export function useWindowManager(): UseWindowManagerReturn {
             : w
         );
       }
-      // New window: cascade offset from last window
       const count = prev.length;
       const newZ = ++nextZIndex;
-      // Position with cascade, wrapping to avoid going off-screen
       const offset = (count % 8) * 28;
       return [
         ...prev,
         {
           id: docId,
           title,
+          kind: "doc",
           x: 40 + offset,
           y: 40 + offset,
           width: DEFAULT_WIDTH,
           height: DEFAULT_HEIGHT,
+          zIndex: newZ,
+          minimized: false,
+        },
+      ];
+    });
+  }, []);
+
+  const openMemory = useCallback((memoryId: string, title: string) => {
+    setWindows((prev) => {
+      const existing = prev.find((w) => w.id === memoryId);
+      if (existing) {
+        const newZ = ++nextZIndex;
+        return prev.map((w) =>
+          w.id === memoryId
+            ? { ...w, minimized: false, zIndex: newZ }
+            : w
+        );
+      }
+      const count = prev.length;
+      const newZ = ++nextZIndex;
+      const offset = (count % 8) * 28;
+      return [
+        ...prev,
+        {
+          id: memoryId,
+          title,
+          kind: "memory",
+          x: 60 + offset,
+          y: 60 + offset,
+          width: MEMORY_DEFAULT_WIDTH,
+          height: MEMORY_DEFAULT_HEIGHT,
           zIndex: newZ,
           minimized: false,
         },
@@ -122,6 +157,7 @@ export function useWindowManager(): UseWindowManagerReturn {
   return {
     windows,
     open,
+    openMemory,
     close,
     focus,
     minimize,

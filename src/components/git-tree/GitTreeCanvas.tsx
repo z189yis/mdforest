@@ -4,6 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { GitTree, ROW_HEIGHT } from "@/server/git/tree-builder";
 import { useViewportController, ViewportTransform } from "@/lib/hooks/useViewportController";
 import { Spinner } from "@/components/ui";
+import type { MemoryMarker } from "@/lib/hooks/useMemoryMarkers";
+import { MEMORY_GLYPHS } from "@/lib/hooks/useMemoryMarkers";
+import type { MemoryMarkerType } from "@/lib/hooks/useMemoryMarkers";
 
 const BRANCH_COLORS = [
   "#6366f1", "#ec4899", "#14b8a6", "#f59e0b", "#8b5cf6",
@@ -32,25 +35,32 @@ type DocLeavesData = {
 
 type LeafPosition = { x: number; y: number };
 
+const MARKER_X_OFFSET = 200;  // X offset from commit for the first memory marker
+const MARKER_SPACING = 14;   // vertical spacing between markers on the same row
+
 interface GitTreeCanvasProps {
   tree?: GitTree;
   isLoading: boolean;
   error?: unknown;
   docLeaves?: DocLeavesData;
+  memoryMarkers?: MemoryMarker[];
   onCommitClick: (hash: string) => void;
   onDocClick?: (docId: string) => void;
+  onMemoryClick?: (memoryId: string) => void;
+  onMemoryPositionChange?: (memoryId: string, markerX: number, markerY: number) => void;
   onFileDrop?: (hash: string | null, fileName: string, content: string, leafX: number, leafY: number) => void;
   onLeafPositionChange?: (docId: string, leafX: number, leafY: number) => void;
+  onGroupToggle?: (commitHash: string) => void;
   onNeedMore?: () => void;
   hasMore?: boolean;
   isFetchingMore?: boolean;
+  showTimeAlways?: boolean;
 }
 
-export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick, onDocClick, onFileDrop, onLeafPositionChange, onNeedMore, hasMore, isFetchingMore }: GitTreeCanvasProps) {
+export function GitTreeCanvas({ tree, isLoading, error, docLeaves, memoryMarkers, onCommitClick, onDocClick, onMemoryClick, onMemoryPositionChange, onFileDrop, onLeafPositionChange, onGroupToggle, onNeedMore, hasMore, isFetchingMore, showTimeAlways }: GitTreeCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number>(0);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
   const [dragHash, setDragHash] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const dragHashRef = useRef<string | null>(null);
@@ -58,14 +68,26 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
   // Hover state
   const [hoveredHash, setHoveredHash] = useState<string | null>(null);
   const [hoveredLeafId, setHoveredLeafId] = useState<string | null>(null);
+  const [hoveredMemoryId, setHoveredMemoryId] = useState<string | null>(null);
   const hoveredHashRef = useRef<string | null>(null);
   const hoveredLeafIdRef = useRef<string | null>(null);
+  const hoveredMemoryIdRef = useRef<string | null>(null);
 
   // Leaf drag state
   const [draggingLeafId, setDraggingLeafId] = useState<string | null>(null);
   const draggingLeafRef = useRef<string | null>(null);
   const dragOffsetRef = useRef({ x: 0, y: 0 });
   const dirtyLeafPositionsRef = useRef<Map<string, LeafPosition>>(new Map());
+  const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null);
+
+  // Memory marker drag state
+  const [draggingMemoryId, setDraggingMemoryId] = useState<string | null>(null);
+  const draggingMemoryRef = useRef<string | null>(null);
+  const dirtyMemoryPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+
+  // Leaf group expand/collapse state
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const expandedGroupsRef = useRef<Set<string>>(new Set());
 
   // Expand animation
   const targetExpandRef = useRef(0);
@@ -76,32 +98,19 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
   docLeavesRef.current = docLeaves;
   const treeRef = useRef<GitTree | undefined>(tree);
   treeRef.current = tree;
+  const showTimeAlwaysRef = useRef(showTimeAlways);
+  showTimeAlwaysRef.current = showTimeAlways;
+  const memoryMarkersRef = useRef<MemoryMarker[] | undefined>(memoryMarkers);
+  memoryMarkersRef.current = memoryMarkers;
 
   const { transform, handleMouseDown, handleMouseMove, handleMouseUp, handleWheel, screenToWorld } =
     useViewportController({ initialOffsetX: 160, initialOffsetY: 40 });
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const { width, height } = entry.contentRect;
-        setCanvasSize({ width: Math.max(width, 100), height: Math.max(height, 100) });
-      }
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !tree) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = canvasSize.width * dpr;
-    canvas.height = canvasSize.height * dpr;
-    ctx.scale(dpr, dpr);
 
     // Lazy-load throttle
     let lastNeedMoreTime = 0;
@@ -116,12 +125,26 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
         currentExpandRef.current = target;
       }
 
+      const dpr = window.devicePixelRatio || 1;
+      const cw = canvas.clientWidth;
+      const ch = canvas.clientHeight;
+      if (canvas.width !== cw * dpr || canvas.height !== ch * dpr) {
+        canvas.width = cw * dpr;
+        canvas.height = ch * dpr;
+        ctx.scale(dpr, dpr);
+      }
+
+      expandedGroupsRef.current = expandedGroups;
       drawFrame(
-        ctx, tree, transform, canvasSize.width, canvasSize.height,
+        ctx, tree, transform, cw, ch,
         dragHash, docLeaves,
         hoveredHashRef.current, hoveredLeafIdRef.current,
         currentExpandRef.current,
-        dirtyLeafPositionsRef.current
+        dirtyLeafPositionsRef.current,
+        showTimeAlwaysRef.current,
+        memoryMarkersRef.current,
+        hoveredMemoryIdRef.current,
+        dirtyMemoryPositionsRef.current
       );
 
       // Detect scroll near bottom → trigger lazy load
@@ -129,7 +152,7 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
         const invZoom = 1 / transform.zoom;
         const endRow = Math.min(
           tree.nodes.length - 1,
-          Math.ceil((canvasSize.height - transform.offsetY) * invZoom / ROW_HEIGHT) + 2
+          Math.ceil((ch - transform.offsetY) * invZoom / ROW_HEIGHT) + 2
         );
         if (endRow >= tree.nodes.length - 10 && Date.now() - lastNeedMoreTime > 600) {
           lastNeedMoreTime = Date.now();
@@ -141,7 +164,7 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
     };
     render();
     return () => cancelAnimationFrame(rafRef.current);
-  }, [tree, transform, canvasSize, dragHash, docLeaves, hasMore, onNeedMore, isFetchingMore]);
+  }, [tree, transform, dragHash, docLeaves, memoryMarkers, hasMore, onNeedMore, isFetchingMore]);
 
   // ---- Interaction handlers ----
 
@@ -152,14 +175,31 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
       const world = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
 
       // Check if clicking on a leaf (for drag)
+      mouseDownPosRef.current = { x: e.clientX, y: e.clientY };
       const leafPositions = computeLeafPositions(tree, docLeavesRef.current, dirtyLeafPositionsRef.current);
       for (const [leafId, pos] of leafPositions) {
         if (Math.abs(world.x - pos.x) < LEAF_HIT_RADIUS && Math.abs(world.y - pos.y) < LEAF_HIT_RADIUS) {
-          e.stopPropagation(); // prevent panning
+          e.stopPropagation();
           draggingLeafRef.current = leafId;
           setDraggingLeafId(leafId);
           dragOffsetRef.current = { x: world.x - pos.x, y: world.y - pos.y };
           return;
+        }
+      }
+
+      // Check if clicking on a memory marker (for drag — same as leaves)
+      if (memoryMarkersRef.current && memoryMarkersRef.current.length > 0) {
+        const mPositions = computeMarkerPositions(tree, memoryMarkersRef.current, 0, -1, dirtyMemoryPositionsRef.current);
+        for (const pos of mPositions) {
+          const dx = (world.x - pos.x) / 7;
+          const dy = (world.y - pos.y) / 5;
+          if (dx * dx + dy * dy <= 1.5) {
+            e.stopPropagation();
+            draggingMemoryRef.current = pos.id;
+            setDraggingMemoryId(pos.id);
+            dragOffsetRef.current = { x: world.x - pos.x, y: world.y - pos.y };
+            return;
+          }
         }
       }
     },
@@ -184,9 +224,29 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
         return;
       }
 
+      // Memory marker dragging
+      if (draggingMemoryRef.current) {
+        e.stopPropagation();
+        const memId = draggingMemoryRef.current;
+        const newX = world.x - dragOffsetRef.current.x;
+        const newY = world.y - dragOffsetRef.current.y;
+        const dirty = new Map(dirtyMemoryPositionsRef.current);
+        dirty.set(memId, { x: newX, y: newY });
+        dirtyMemoryPositionsRef.current = dirty;
+        return;
+      }
+
       // Normal hover
-      const hit = preciseHitTest(world.x, world.y, tree, docLeavesRef.current, dirtyLeafPositionsRef.current);
-      if (hit?.type === "leaf" || hit?.type === "leaf-connection") {
+      const hit = preciseHitTest(world.x, world.y, tree, docLeavesRef.current, dirtyLeafPositionsRef.current, memoryMarkersRef.current, expandedGroupsRef.current);
+      if (hit?.type === "memory-marker") {
+        hoveredMemoryIdRef.current = hit.memoryId;
+        hoveredHashRef.current = null;
+        hoveredLeafIdRef.current = null;
+        setHoveredMemoryId(hit.memoryId);
+        setHoveredHash(null);
+        setHoveredLeafId(null);
+        targetExpandRef.current = 0;
+      } else if (hit?.type === "leaf" || hit?.type === "leaf-connection") {
         hoveredLeafIdRef.current = hit.leafId;
         hoveredHashRef.current = hit.type === "leaf-connection" ? hit.hash : (hit as any).hash;
         setHoveredLeafId(hit.leafId);
@@ -195,22 +255,27 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
       } else if (hit?.type === "node-dot" || hit?.type === "node-id") {
         hoveredHashRef.current = hit.hash;
         hoveredLeafIdRef.current = null;
+        hoveredMemoryIdRef.current = null;
         setHoveredHash(hit.hash);
         setHoveredLeafId(null);
+        setHoveredMemoryId(null);
         targetExpandRef.current = 24;
       } else if (hit?.type === "edge") {
-        // Hovering an edge: highlight it + connected nodes
-        const edge = tree.edges[hit.edgeIdx]!;
-        hoveredHashRef.current = edge.fromHash;
+        // Hovering an edge: no highlight
+        hoveredHashRef.current = null;
         hoveredLeafIdRef.current = null;
-        setHoveredHash(edge.fromHash);
+        hoveredMemoryIdRef.current = null;
+        setHoveredHash(null);
         setHoveredLeafId(null);
+        setHoveredMemoryId(null);
         targetExpandRef.current = 0;
       } else {
         hoveredHashRef.current = null;
         hoveredLeafIdRef.current = null;
+        hoveredMemoryIdRef.current = null;
         setHoveredHash(null);
         setHoveredLeafId(null);
+        setHoveredMemoryId(null);
         targetExpandRef.current = 0;
       }
     },
@@ -228,8 +293,18 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
       }
       draggingLeafRef.current = null;
       setDraggingLeafId(null);
+
+      if (draggingMemoryRef.current && onMemoryPositionChange) {
+        const memId = draggingMemoryRef.current;
+        const pos = dirtyMemoryPositionsRef.current.get(memId);
+        if (pos) {
+          onMemoryPositionChange(memId, pos.x, pos.y);
+        }
+      }
+      draggingMemoryRef.current = null;
+      setDraggingMemoryId(null);
     },
-    [onLeafPositionChange]
+    [onLeafPositionChange, onMemoryPositionChange]
   );
 
   const handleCanvasMouseLeave = useCallback(() => {
@@ -245,18 +320,43 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
     setDraggingLeafId(null);
     hoveredHashRef.current = null;
     hoveredLeafIdRef.current = null;
+    hoveredMemoryIdRef.current = null;
     setHoveredHash(null);
     setHoveredLeafId(null);
+    setHoveredMemoryId(null);
     targetExpandRef.current = 0;
   }, [onLeafPositionChange]);
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
       if (!tree || !canvasRef.current) return;
+      // Ignore click if the mouse moved since mousedown (i.e. it was a drag, not a click)
+      if (mouseDownPosRef.current) {
+        const dx = e.clientX - mouseDownPosRef.current.x;
+        const dy = e.clientY - mouseDownPosRef.current.y;
+        mouseDownPosRef.current = null;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) return;
+      }
       const rect = canvasRef.current.getBoundingClientRect();
       const world = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
 
-      // Check leaf click first
+      // Check group icon click first
+      const hit = preciseHitTest(world.x, world.y, tree, docLeavesRef.current, dirtyLeafPositionsRef.current, memoryMarkersRef.current, expandedGroupsRef.current);
+      if (hit?.type === "leaf-group") {
+        setExpandedGroups(prev => {
+          const next = new Set(prev);
+          if (next.has(hit.commitHash)) next.delete(hit.commitHash);
+          else next.add(hit.commitHash);
+          return next;
+        });
+        return;
+      }
+      if (hit?.type === "memory-marker") {
+        onMemoryClick?.(hit.memoryId);
+        return;
+      }
+
+      // Check leaf click
       const leafPositions = computeLeafPositions(tree, docLeavesRef.current, dirtyLeafPositionsRef.current);
       for (const [leafId, pos] of leafPositions) {
         if (Math.abs(world.x - pos.x) < LEAF_HIT_RADIUS && Math.abs(world.y - pos.y) < LEAF_HIT_RADIUS) {
@@ -274,7 +374,7 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
         }
       }
     },
-    [tree, screenToWorld, onCommitClick, onDocClick]
+    [tree, screenToWorld, onCommitClick, onDocClick, onGroupToggle]
   );
 
   const handleDragOver = useCallback(
@@ -285,7 +385,7 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
       const rect = canvasRef.current.getBoundingClientRect();
       const world = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
 
-      const hit = preciseHitTest(world.x, world.y, tree, docLeavesRef.current, dirtyLeafPositionsRef.current);
+      const hit = preciseHitTest(world.x, world.y, tree, docLeavesRef.current, dirtyLeafPositionsRef.current, memoryMarkersRef.current, expandedGroupsRef.current);
       const hash = (hit?.type === "node-dot" || hit?.type === "node-id" || hit?.type === "edge")
         ? hit.hash : null;
       dragHashRef.current = hash;
@@ -356,8 +456,7 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, onCommitClick
       )}
       <canvas
         ref={canvasRef}
-        style={{ width: canvasSize.width, height: canvasSize.height }}
-        className="block"
+        className="block w-full h-full"
         onClick={handleClick}
         onMouseDown={handleCanvasMouseDown}
         onMouseMove={handleCanvasMouseMove}
@@ -379,7 +478,11 @@ function drawFrame(
   hoveredHash?: string | null,
   hoveredLeafId?: string | null,
   expandOffset?: number,
-  dirtyLeafPositions?: Map<string, LeafPosition>
+  dirtyLeafPositions?: Map<string, LeafPosition>,
+  showTimeAlways?: boolean,
+  memoryMarkers?: MemoryMarker[],
+  hoveredMemoryId?: string | null,
+  dirtyMemoryPositions?: Map<string, { x: number; y: number }>
 ) {
   ctx.clearRect(0, 0, canvasW, canvasH);
   ctx.save();
@@ -421,6 +524,9 @@ function drawFrame(
   // Compute leaf positions (for connections and icons)
   const leafPositions = computeLeafPositions(tree, docLeaves, dirtyLeafPositions ?? new Map());
 
+  // Compute groups: auto-positioned leaves sharing the same commit with ≥3 leaves get grouped
+  const leafGroups = computeLeafGroups(docLeaves, tree, leafPositions, dirtyLeafPositions ?? new Map());
+
   // Build set of leaf IDs connected to the hovered node
   const hoveredNodeLeafIds = new Set<string>();
   if (hoveredHash && docLeaves?.byCommit[hoveredHash]) {
@@ -437,8 +543,8 @@ function drawFrame(
     const from = tree.nodes[edge.fromRow], to = tree.nodes[edge.toRow];
     if (!from || !to) continue;
 
-    const fromY = from.y + (edge.fromRow > hoveredRow ? effectiveExpand : 0) + (edge.fromRow === hoveredRow ? effectiveExpand * 0.5 : 0);
-    const toY = to.y + (edge.toRow > hoveredRow ? effectiveExpand : 0) + (edge.toRow === hoveredRow ? effectiveExpand * 0.5 : 0);
+    const fromY = from.y + (edge.fromRow > hoveredRow ? effectiveExpand : 0);
+    const toY = to.y + (edge.toRow > hoveredRow ? effectiveExpand : 0);
 
     const c = BRANCH_COLORS[edge.fromColumn % BRANCH_COLORS.length]!;
     const isConnected = connectedEdges.has(i);
@@ -454,12 +560,28 @@ function drawFrame(
     if (i > hoveredRow) effectiveY += effectiveExpand;
 
     const isHovered = i === hoveredRow;
-    drawCommitNode(ctx, node, effectiveY, highlightHash === node.hash, isHovered, worldWidth, isHovered ? effectiveExpand : 0);
+    drawCommitNode(ctx, node, effectiveY, highlightHash === node.hash, isHovered, worldWidth, isHovered ? effectiveExpand : 0, showTimeAlways);
   }
 
-  // 3. Leaf-to-commit connection lines
+  // 3. Leaf-to-commit connection lines (group-aware)
   if (docLeaves) {
+    const drawnLeaves = new Set<string>(); // track leaves already drawn as part of a collapsed group
+
+    for (const [commitHash, group] of leafGroups) {
+      if (expandedGroupsRef.current.has(commitHash)) continue; // expanded → draw individually
+      // Collapsed group → single connection
+      const groupLeafIds = new Set(group.leafIds);
+      const node = tree.nodes.find(n => n.hash === commitHash);
+      if (!node) continue;
+      const ny = node.y + (node.row > hoveredRow ? effectiveExpand : 0) + ROW_HEIGHT / 2;
+      const highlight = hoveredHash === commitHash;
+      drawLeafConnection(ctx, node.x + 5, ny, group.cx, group.cy, highlight);
+      for (const lid of group.leafIds) drawnLeaves.add(lid);
+    }
+
+    // Individual leaf connections (skip leaves in collapsed groups)
     for (const [leafId, pos] of leafPositions) {
+      if (drawnLeaves.has(leafId)) continue;
       const leaf = docLeaves.leafMap[leafId];
       if (!leaf || leaf.connectedHashes.length === 0) continue;
 
@@ -470,22 +592,64 @@ function drawFrame(
       for (const hash of leaf.connectedHashes) {
         const node = tree.nodes.find(n => n.hash === hash);
         if (!node) continue;
-
-        const ny = node.y + (node.row > hoveredRow ? effectiveExpand : 0) + ROW_HEIGHT / 2 + (node.row === hoveredRow ? effectiveExpand * 0.5 : 0);
+        const ny = node.y + (node.row > hoveredRow ? effectiveExpand : 0) + ROW_HEIGHT / 2;
         drawLeafConnection(ctx, node.x + 5, ny, pos.x, pos.y, highlightConn);
       }
     }
   }
 
-  // 4. Leaf icons and names
+  // 3.5 Memory-to-commit connection lines (same style as leaves)
+  if (memoryMarkers && memoryMarkers.length > 0) {
+    const markerPositions = computeMarkerPositions(tree, memoryMarkers, effectiveExpand, hoveredRow, dirtyMemoryPositions);
+    for (const pos of markerPositions) {
+      const commitHash = memoryMarkers.find(m => m.id === pos.id)?.commitHash;
+      if (!commitHash) continue;
+      const node = tree.nodes.find(n =>
+        n.hash === commitHash || n.shortHash === commitHash || n.hash.startsWith(commitHash)
+      );
+      if (!node) continue;
+      const ny = node.y + (node.row > hoveredRow ? effectiveExpand : 0) + ROW_HEIGHT / 2;
+      const color = MEMORY_GLYPHS[pos.type]?.color ?? "#a855f7";
+      const isConnected = hoveredMemoryId === pos.id || hoveredHash === commitHash;
+      drawLeafConnection(ctx, node.x + 5, ny, pos.x, pos.y, isConnected);
+      // Override color
+      ctx.strokeStyle = isConnected ? color + "d9" : color + "66";
+      ctx.stroke();
+    }
+  }
+
+  // 4. Leaf icons and names (group-aware)
   if (docLeaves) {
+    const drawnLeaves = new Set<string>();
+
+    // Draw collapsed group icons first
+    for (const [commitHash, group] of leafGroups) {
+      if (expandedGroupsRef.current.has(commitHash)) continue;
+      for (const lid of group.leafIds) drawnLeaves.add(lid);
+      const isGroupHovered = hoveredHash === commitHash;
+      drawGroupLeafIcon(ctx, group.cx, group.cy, group.count, isGroupHovered);
+    }
+
+    // Draw individual leaf icons (skip collapsed group members)
     for (const [leafId, pos] of leafPositions) {
+      if (drawnLeaves.has(leafId)) continue;
       const leaf = docLeaves.leafMap[leafId];
       if (!leaf) continue;
       const isLeafHovered = hoveredLeafId === leafId;
       const isConnectedToHoveredNode = hoveredHash ? leaf.connectedHashes.includes(hoveredHash) : false;
       const highlight = isLeafHovered || isConnectedToHoveredNode;
       drawLeafIcon(ctx, pos.x, pos.y, leaf.title, highlight, worldWidth > 400 || highlight);
+    }
+  }
+
+  // 5. Memory marker icons (same style as leaves)
+  if (memoryMarkers && memoryMarkers.length > 0) {
+    const markerPositions = computeMarkerPositions(tree, memoryMarkers, effectiveExpand, hoveredRow, dirtyMemoryPositions);
+    for (const pos of markerPositions) {
+      const isHovered = hoveredMemoryId === pos.id;
+      const color = MEMORY_GLYPHS[pos.type]?.color ?? "#a855f7";
+      const label = pos.summary ?? pos.type;
+      drawMemoryIcon(ctx, pos.x, pos.y, label, color, pos.source, isHovered);
     }
   }
 
@@ -499,7 +663,8 @@ function drawCommitNode(
   highlight: boolean,
   isHovered: boolean,
   worldWidth: number,
-  expandOffset: number
+  expandOffset: number,
+  showTimeAlways?: boolean
 ) {
   const x = node.x;
   const y = effectiveY;
@@ -516,11 +681,13 @@ function drawCommitNode(
     ctx.beginPath(); roundRect(ctx, x - 4, y + 2, 400, rowHeight - 4, 6); ctx.fill();
   }
 
-  // Date on the left
-  const dateStr = formatDate(node.authorDate);
-  ctx.font = "10px 'Cascadia Code', monospace";
-  ctx.fillStyle = isHovered ? "#a5b4fc" : "#666";
-  ctx.fillText(dateStr, x + DATE_X_OFFSET, y + 18);
+  // Date on the left — only when hovering or toggle enabled
+  if (showTimeAlways || isHovered) {
+    const dateStr = formatDate(node.authorDate);
+    ctx.font = "10px 'Cascadia Code', monospace";
+    ctx.fillStyle = isHovered ? "#a5b4fc" : "#666";
+    ctx.fillText(dateStr, x + DATE_X_OFFSET, y + 18);
+  }
 
   // Dot — larger on hover
   const dotR = isHovered ? 5 : 4;
@@ -622,6 +789,169 @@ function drawLeafIcon(
   }
 }
 
+// ============================================================================
+//  Memory markers
+// ============================================================================
+
+interface MarkerPosition {
+  id: string;
+  type: MemoryMarkerType;
+  x: number;
+  y: number;
+  confidence: number;
+  source: string;
+  summary: string | null;
+}
+
+function computeMarkerPositions(
+  tree: GitTree,
+  markers: MemoryMarker[],
+  expandOffset: number,
+  hoveredRow: number,
+  dirtyPositions?: Map<string, { x: number; y: number }>
+): MarkerPosition[] {
+  const positions: MarkerPosition[] = [];
+  const rowCounters = new Map<number, number>();
+
+  // First pass: place markers with stored or dirty positions
+  const autoPlace: Array<{ marker: MemoryMarker; node: typeof tree.nodes[0]; row: number }> = [];
+
+  for (const marker of markers) {
+    let row = -1;
+
+    if (marker.commitHash) {
+      const ch = marker.commitHash;
+      const nodeIdx = tree.nodes.findIndex(
+        (n) => n.hash === ch || n.shortHash === ch || n.hash.startsWith(ch)
+      );
+      if (nodeIdx >= 0) row = nodeIdx;
+    }
+
+    if (row < 0) continue;
+    const node = tree.nodes[row];
+    if (!node) continue;
+
+    const effectiveY = node.y + (row > hoveredRow ? expandOffset : 0) + ROW_HEIGHT / 2;
+
+    // Check dirty position (drag in progress)
+    const dirtyPos = dirtyPositions?.get(marker.id);
+    if (dirtyPos) {
+      positions.push({
+        id: marker.id,
+        type: marker.type as MemoryMarkerType,
+        x: dirtyPos.x,
+        y: dirtyPos.y,
+        confidence: marker.confidence,
+        source: marker.source,
+        summary: marker.summary,
+      });
+      continue;
+    }
+
+    // Check stored position from DB
+    if (marker.markerX !== null && marker.markerY !== null) {
+      positions.push({
+        id: marker.id,
+        type: marker.type as MemoryMarkerType,
+        x: marker.markerX,
+        y: marker.markerY,
+        confidence: marker.confidence,
+        source: marker.source,
+        summary: marker.summary,
+      });
+      continue;
+    }
+
+    // Auto-placement needed
+    autoPlace.push({ marker, node, row });
+  }
+
+  // Second pass: auto-place remaining markers with overlap avoidance
+  // Group by commit row
+  const byRow = new Map<number, typeof autoPlace>();
+  for (const item of autoPlace) {
+    const list = byRow.get(item.row) ?? [];
+    list.push(item);
+    byRow.set(item.row, list);
+  }
+
+  for (const [row, items] of byRow) {
+    const node = items[0]!.node;
+    const baseY = node.y + (row > hoveredRow ? expandOffset : 0) + ROW_HEIGHT / 2;
+    const baseX = node.x + MARKER_X_OFFSET;
+
+    // For items on the same row, stack them to avoid overlap
+    // Each marker icon is ~14px tall + label, spacing = 20px vertical
+    const VERTICAL_SPACING = 20;
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]!;
+      // Offset vertically to avoid overlapping
+      const y = baseY + i * VERTICAL_SPACING - ((items.length - 1) * VERTICAL_SPACING) / 2;
+
+      positions.push({
+        id: item.marker.id,
+        type: item.marker.type as MemoryMarkerType,
+        x: baseX,
+        y,
+        confidence: item.marker.confidence,
+        source: item.marker.source,
+        summary: item.marker.summary,
+      });
+    }
+  }
+
+  return positions;
+}
+
+// Memory marker icon — same structure as drawLeafIcon but with type-specific colors
+function drawMemoryIcon(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number,
+  label: string,
+  color: string,
+  source: string,
+  highlight: boolean,
+) {
+  // Source-based opacity
+  let alpha: number;
+  switch (source) {
+    case "user": alpha = 1.0; break;
+    case "agent": alpha = 0.85; break;
+    case "tool": alpha = 0.7; break;
+    case "inferred": alpha = 0.5; break;
+    default: alpha = 0.85;
+  }
+  if (highlight) alpha = 1.0;
+
+  ctx.globalAlpha = alpha;
+
+  // Glow ellipse (like leaf glow)
+  ctx.beginPath();
+  ctx.ellipse(x, y, 9, 6, -0.3, 0, Math.PI * 2);
+  ctx.fillStyle = highlight ? color + "4d" : color + "1a";
+  ctx.fill();
+
+  // Icon ellipse (like leaf icon, but in type color)
+  ctx.beginPath();
+  ctx.ellipse(x, y, highlight ? 7 : 6, highlight ? 5 : 4, -0.3, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.strokeStyle = highlight ? color : color + "80";
+  ctx.lineWidth = highlight ? 1.8 : 0.8;
+  ctx.stroke();
+
+  // Label text (like leaf title)
+  if (highlight || true) { // always show name like leaves when worldWidth > 400
+    ctx.font = "10px Inter, sans-serif";
+    ctx.fillStyle = highlight ? color : color + "cc";
+    const t = label.length > 14 ? label.substring(0, 14) + "\u2026" : label;
+    ctx.fillText(t, x + 10, y + 4);
+  }
+
+  ctx.globalAlpha = 1;
+}
+
 function drawCurve(
   ctx: CanvasRenderingContext2D,
   x1: number, y1: number,
@@ -688,6 +1018,106 @@ function computeLeafPositions(
 }
 
 // ============================================================================
+//  Leaf grouping — collapse crowded leaves into a single group icon
+// ============================================================================
+
+interface LeafGroup {
+  commitHash: string;
+  leafIds: string[];
+  count: number;
+  cx: number;
+  cy: number;
+}
+
+const GROUP_MIN_THRESHOLD = 3; // min leaves sharing a commit to trigger grouping
+
+function computeLeafGroups(
+  docLeaves: DocLeavesData | undefined,
+  tree: GitTree,
+  leafPositions: Map<string, LeafPosition>,
+  dirtyPositions: Map<string, LeafPosition>,
+): Map<string, LeafGroup> {
+  const groups = new Map<string, LeafGroup>();
+  if (!docLeaves) return groups;
+
+  // Collect auto-positioned leaves (no explicit pos, no dirty pos) grouped by first connected hash
+  const byCommit = new Map<string, Array<{ id: string; pos: LeafPosition }>>();
+  for (const leaf of Object.values(docLeaves.leafMap)) {
+    // Skip leaves with explicit or dirty positions — user intentionally placed them
+    if (dirtyPositions.has(leaf.id)) continue;
+    if (leaf.leafX !== null && leaf.leafY !== null) continue;
+    // Only group leaves connected to a commit
+    const hash = leaf.connectedHashes[0];
+    if (!hash) continue;
+    const pos = leafPositions.get(leaf.id);
+    if (!pos) continue;
+    if (!byCommit.has(hash)) byCommit.set(hash, []);
+    byCommit.get(hash)!.push({ id: leaf.id, pos });
+  }
+
+  // Create groups for commits with ≥ threshold leaves
+  for (const [hash, leaves] of byCommit) {
+    if (leaves.length < GROUP_MIN_THRESHOLD) continue;
+    // Compute group center: average of all leaf positions
+    let sumX = 0, sumY = 0;
+    for (const l of leaves) { sumX += l.pos.x; sumY += l.pos.y; }
+    groups.set(hash, {
+      commitHash: hash,
+      leafIds: leaves.map(l => l.id),
+      count: leaves.length,
+      cx: sumX / leaves.length,
+      cy: sumY / leaves.length,
+    });
+  }
+
+  return groups;
+}
+
+/**
+ * Group leaf icon — larger ellipse with count badge
+ */
+function drawGroupLeafIcon(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number,
+  count: number,
+  highlight: boolean,
+) {
+  const size = highlight ? 9 : 8;
+  const sizeY = highlight ? 7 : 6;
+
+  // Glow
+  ctx.beginPath();
+  ctx.ellipse(x, y, size + 3, sizeY + 2, -0.3, 0, Math.PI * 2);
+  ctx.fillStyle = highlight ? "rgba(34,197,94,0.35)" : "rgba(34,197,94,0.12)";
+  ctx.fill();
+
+  // Outer ring
+  ctx.beginPath();
+  ctx.ellipse(x, y, size, sizeY, -0.3, 0, Math.PI * 2);
+  ctx.fillStyle = highlight ? "#4ade80" : "rgba(34,197,94,0.5)";
+  ctx.fill();
+  ctx.strokeStyle = highlight ? "#22c55e" : "rgba(34,197,94,0.6)";
+  ctx.lineWidth = highlight ? 2 : 1;
+  ctx.stroke();
+
+  // Count badge
+  const text = String(count);
+  ctx.font = `bold ${highlight ? 10 : 9}px Inter, sans-serif`;
+  ctx.fillStyle = "#fff";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, x, y);
+
+  // Label
+  ctx.font = "10px Inter, sans-serif";
+  ctx.fillStyle = highlight ? "#86efac" : "#4ade80";
+  ctx.textAlign = "start";
+  ctx.textBaseline = "middle";
+  ctx.fillText(count + " docs", x + size + 4, y);
+  ctx.textAlign = "start";
+}
+
+// ============================================================================
 //  Precise hit testing — per-element (dot, id, leaf, edge, connection)
 // ============================================================================
 
@@ -698,19 +1128,41 @@ type HitResult =
   | { type: "node-dot"; hash: string }
   | { type: "node-id"; hash: string }
   | { type: "leaf"; leafId: string; hash: string | null }
+  | { type: "leaf-group"; commitHash: string }
   | { type: "edge"; edgeIdx: number }
   | { type: "leaf-connection"; leafId: string; hash: string }
+  | { type: "memory-marker"; memoryId: string }
   | null;
 
 function preciseHitTest(
   worldX: number, worldY: number,
   tree: GitTree,
   docLeaves: DocLeavesData | undefined,
-  dirtyPositions: Map<string, LeafPosition>
+  dirtyPositions: Map<string, LeafPosition>,
+  memoryMarkers?: MemoryMarker[],
+  expandedGroups?: Set<string>,
 ): HitResult {
-  // 1. Leaf icons (ellipse test — highest visual priority)
+  // 0. Group leaf icons (before individual leaves — larger hit area)
   const leafPositions = computeLeafPositions(tree, docLeaves, dirtyPositions);
+  const leafGroups = computeLeafGroups(docLeaves, tree, leafPositions, dirtyPositions);
+  for (const [commitHash, group] of leafGroups) {
+    if (expandedGroups?.has(commitHash)) continue; // expanded → skip
+    const dx = (worldX - group.cx) / 10;
+    const dy = (worldY - group.cy) / 8;
+    if (dx * dx + dy * dy <= 1) {
+      return { type: "leaf-group", commitHash };
+    }
+  }
+
+  // 1. Leaf icons (ellipse test — highest visual priority)
   for (const [leafId, pos] of leafPositions) {
+    // Skip leaves in collapsed groups
+    const leaf = docLeaves?.leafMap[leafId];
+    const ch = leaf?.connectedHashes[0];
+    if (ch) {
+      const group = leafGroups.get(ch);
+      if (group && group.leafIds.includes(leafId) && !expandedGroups?.has(ch)) continue;
+    }
     const dx = (worldX - pos.x) / 7;  // rx=7 when highlighted
     const dy = (worldY - pos.y) / 5;  // ry=5 when highlighted
     if (dx * dx + dy * dy <= 1) {
@@ -719,7 +1171,19 @@ function preciseHitTest(
     }
   }
 
-  // 2. Node dots (circle test)
+  // 2. Memory markers (ellipse test — same as leaf icons)
+  if (memoryMarkers && memoryMarkers.length > 0) {
+    const markerPositions = computeMarkerPositions(tree, memoryMarkers, 0, -1, undefined);
+    for (const pos of markerPositions) {
+      const dx = (worldX - pos.x) / 7;
+      const dy = (worldY - pos.y) / 5;
+      if (dx * dx + dy * dy <= 1.2) { // slightly larger hit area than leaves
+        return { type: "memory-marker", memoryId: pos.id };
+      }
+    }
+  }
+
+  // 3. Node dots (circle test)
   for (const node of tree.nodes) {
     const dotX = node.x + 5;
     const dotY = node.y + ROW_HEIGHT / 2;
@@ -728,7 +1192,7 @@ function preciseHitTest(
     }
   }
 
-  // 3. Node IDs — shortHash text bounding box
+  // 4. Node IDs — shortHash text bounding box
   for (const node of tree.nodes) {
     const textX = node.x + 14;
     const textW = 7 * HASH_CHAR_W + 2; // ~48px
@@ -739,7 +1203,7 @@ function preciseHitTest(
     }
   }
 
-  // 4. Commit-to-commit edges (bezier proximity)
+  // 5. Commit-to-commit edges (bezier proximity)
   for (let i = 0; i < tree.edges.length; i++) {
     const edge = tree.edges[i]!;
     if (edge.fromRow >= tree.nodes.length || edge.toRow >= tree.nodes.length) continue;
@@ -761,7 +1225,7 @@ function preciseHitTest(
     }
   }
 
-  // 5. Leaf-to-commit connections (bezier from commit dot to leaf)
+  // 6. Leaf-to-commit connections (bezier from commit dot to leaf)
   if (docLeaves) {
     for (const [leafId, leafPos] of leafPositions) {
       const leaf = docLeaves.leafMap[leafId];

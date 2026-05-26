@@ -1,5 +1,6 @@
 import { getServerSession } from "next-auth";
 import { initTRPC, TRPCError } from "@trpc/server";
+import superjson from "superjson";
 import { authOptions } from "@/server/auth";
 import { prisma } from "@/server/db/prisma";
 import { canAccessRepo, canAccessDocument } from "@/server/auth/permissions";
@@ -10,7 +11,9 @@ export const createTRPCContext = async () => {
   return { session, prisma };
 };
 
-const t = initTRPC.context<typeof createTRPCContext>().create({});
+const t = initTRPC.context<typeof createTRPCContext>().create({
+  transformer: superjson,
+});
 
 export const router = t.router;
 export const publicProcedure = t.procedure;
