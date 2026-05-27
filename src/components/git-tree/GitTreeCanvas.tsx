@@ -1072,9 +1072,9 @@ function computeLeafGroups(
     if (!byCommit.has(hash)) byCommit.set(hash, []);
     byCommit.get(hash)!.push({ id: leaf.id, pos });
   }
-  if (_dbgTotal > 0 && (typeof window !== "undefined")) {
+  if (_dbgTotal > 0) {
     _dbgLogCounter = (_dbgLogCounter ?? 0) + 1;
-    if (_dbgLogCounter % 120 === 1) { // ~every 2s at 60fps
+    if (_dbgLogCounter % 30 === 1) { // ~every 2s at 60fps
       const largest = [...byCommit.entries()].sort((a,b) => b[1].length - a[1].length)[0];
       console.log("[leaf-group]", {
         total: _dbgTotal, explicit: _dbgExplicit, dirty: _dbgDirty,
