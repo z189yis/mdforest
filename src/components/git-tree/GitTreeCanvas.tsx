@@ -526,18 +526,6 @@ function drawFrame(
 
   // Compute groups: auto-positioned leaves sharing the same commit with ≥3 leaves get grouped
   const leafGroups = computeLeafGroups(docLeaves, tree, leafPositions, dirtyLeafPositions ?? new Map());
-  // DEBUG
-  _dbgLogCounter2 = (_dbgLogCounter2 ?? 0) + 1;
-  if (_dbgLogCounter2 % 180 === 1) {
-    console.log("[drawFrame]", {
-      hasDocLeaves: !!docLeaves,
-      leafMapSize: docLeaves ? Object.keys(docLeaves.leafMap).length : 0,
-      byCommitKeys: docLeaves ? Object.keys(docLeaves.byCommit).length : 0,
-      isolatedCount: docLeaves?.isolated?.length ?? 0,
-      leafGroupsSize: leafGroups.size,
-      leafPositionsSize: leafPositions?.size ?? 0,
-    });
-  }
 
   // Build set of leaf IDs connected to the hovered node
   const hoveredNodeLeafIds = new Set<string>();
@@ -1042,8 +1030,6 @@ interface LeafGroup {
 }
 
 const GROUP_MIN_THRESHOLD = 3; // min leaves sharing a commit to trigger grouping
-let _dbgLogCounter = 0; // throttle debug logging
-let _dbgLogCounter2 = 0;
 
 function computeLeafGroups(
   docLeaves: DocLeavesData | undefined,
@@ -1052,38 +1038,21 @@ function computeLeafGroups(
   dirtyPositions: Map<string, LeafPosition>,
 ): Map<string, LeafGroup> {
   const groups = new Map<string, LeafGroup>();
-  if (!docLeaves) { console.log("[leaf-group] docLeaves is undefined/null, returning empty"); return groups; }
-
-  // DEBUG: trace why grouping might not fire
-  let _dbgTotal = 0, _dbgExplicit = 0, _dbgDirty = 0, _dbgNoHash = 0, _dbgNoPos = 0;
+  if (!docLeaves) return groups;
 
   // Collect auto-positioned leaves (no explicit pos, no dirty pos) grouped by first connected hash
   const byCommit = new Map<string, Array<{ id: string; pos: LeafPosition }>>();
   for (const leaf of Object.values(docLeaves.leafMap)) {
-    _dbgTotal++;
     // Skip leaves with explicit or dirty positions — user intentionally placed them
-    if (dirtyPositions.has(leaf.id)) { _dbgDirty++; continue; }
-    if (leaf.leafX !== null && leaf.leafY !== null) { _dbgExplicit++; continue; }
+    if (dirtyPositions.has(leaf.id)) continue;
+    if (leaf.leafX !== null && leaf.leafY !== null) continue;
     // Only group leaves connected to a commit
     const hash = leaf.connectedHashes[0];
-    if (!hash) { _dbgNoHash++; continue; }
+    if (!hash) continue;
     const pos = leafPositions.get(leaf.id);
-    if (!pos) { _dbgNoPos++; continue; }
+    if (!pos) continue;
     if (!byCommit.has(hash)) byCommit.set(hash, []);
     byCommit.get(hash)!.push({ id: leaf.id, pos });
-  }
-  if (_dbgTotal > 0) {
-    _dbgLogCounter = (_dbgLogCounter ?? 0) + 1;
-    if (_dbgLogCounter % 30 === 1) { // ~every 2s at 60fps
-      const largest = [...byCommit.entries()].sort((a,b) => b[1].length - a[1].length)[0];
-      console.log("[leaf-group]", {
-        total: _dbgTotal, explicit: _dbgExplicit, dirty: _dbgDirty,
-        noHash: _dbgNoHash, noPos: _dbgNoPos,
-        candidatesByCommit: [...byCommit.entries()].map(([h, l]) => ({ hash: h.substring(0,7), count: l.length })),
-        largest: largest ? { hash: largest[0].substring(0,7), count: largest[1].length } : null,
-        threshold: GROUP_MIN_THRESHOLD,
-      });
-    }
   }
 
   // Create groups for commits with ≥ threshold leaves
