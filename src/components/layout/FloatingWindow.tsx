@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useEffect } from "react";
+import type { WindowKind } from "@/lib/hooks/useWindowManager";
 
 interface FloatingWindowProps {
   x: number;
@@ -10,6 +11,7 @@ interface FloatingWindowProps {
   zIndex: number;
   minimized: boolean;
   title: string;
+  windowKind?: WindowKind;
   onMove: (x: number, y: number) => void;
   onResize: (width: number, height: number) => void;
   onFocus: () => void;
@@ -17,6 +19,12 @@ interface FloatingWindowProps {
   onMinimize: () => void;
   children: React.ReactNode;
 }
+
+const KIND_STYLES: Record<WindowKind, { icon: string; color: string }> = {
+  doc:    { color: "text-green-500",  icon: "M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 14c1.669 0 3.218.51 4.5 1.385A7.962 7.962 0 0114.5 14c1.255 0 2.443.29 3.5.804v-10A7.968 7.968 0 0014.5 4c-1.255 0-2.443.29-3.5.804V12a1 1 0 11-2 0V4.804z" },
+  memory: { color: "text-purple-500", icon: "M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" },
+  commit: { color: "text-amber-500", icon: "M6 3a1 1 0 011-1h.01a1 1 0 010 2H7a1 1 0 01-1-1zm3 4a1 1 0 011-1h.01a1 1 0 010 2H10a1 1 0 01-1-1zm3 4a1 1 0 011-1h.01a1 1 0 010 2H13a1 1 0 01-1-1zm-3-4a1 1 0 00-1-1H6a1 1 0 000 2h2a1 1 0 001-1zm5-4a1 1 0 00-1-1h-2a1 1 0 000 2h2a1 1 0 001-1z" },
+};
 
 type DragType = "title" | "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 
@@ -30,6 +38,7 @@ export function FloatingWindow({
   zIndex,
   minimized,
   title,
+  windowKind = "doc",
   onMove,
   onResize,
   onFocus,
@@ -37,6 +46,7 @@ export function FloatingWindow({
   onMinimize,
   children,
 }: FloatingWindowProps) {
+  const kindStyle = KIND_STYLES[windowKind];
   const dragRef = useRef<{
     type: DragType;
     startX: number;
@@ -159,8 +169,8 @@ export function FloatingWindow({
         onPointerDown={(e) => handlePointerDown("title", e)}
         onDoubleClick={onMinimize}
       >
-        <svg className="h-3.5 w-3.5 text-green-500 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-          <path d="M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 14c1.669 0 3.218.51 4.5 1.385A7.962 7.962 0 0114.5 14c1.255 0 2.443.29 3.5.804v-10A7.968 7.968 0 0014.5 4c-1.255 0-2.443.29-3.5.804V12a1 1 0 11-2 0V4.804z" />
+        <svg className={`h-3.5 w-3.5 ${kindStyle.color} flex-shrink-0`} fill="currentColor" viewBox="0 0 24 24">
+          <path d={kindStyle.icon} />
         </svg>
         <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300 truncate flex-1">
           {title}

@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from "react";
 
-export type WindowKind = "doc" | "memory";
+export type WindowKind = "doc" | "memory" | "commit";
 
 export interface WindowState {
   id: string;
@@ -20,6 +20,7 @@ interface UseWindowManagerReturn {
   windows: WindowState[];
   open: (docId: string, title: string) => void;
   openMemory: (memoryId: string, title: string) => void;
+  openCommit: (commitHash: string, title: string) => void;
   close: (docId: string) => void;
   focus: (docId: string) => void;
   minimize: (docId: string) => void;
@@ -32,6 +33,8 @@ const DEFAULT_WIDTH = 520;
 const DEFAULT_HEIGHT = 420;
 const MEMORY_DEFAULT_WIDTH = 400;
 const MEMORY_DEFAULT_HEIGHT = 320;
+const COMMIT_DEFAULT_WIDTH = 480;
+const COMMIT_DEFAULT_HEIGHT = 500;
 const MIN_WIDTH = 260;
 const MIN_HEIGHT = 180;
 
@@ -102,6 +105,37 @@ export function useWindowManager(): UseWindowManagerReturn {
     });
   }, []);
 
+  const openCommit = useCallback((commitHash: string, title: string) => {
+    setWindows((prev) => {
+      const existing = prev.find((w) => w.id === commitHash);
+      if (existing) {
+        const newZ = ++nextZIndex;
+        return prev.map((w) =>
+          w.id === commitHash
+            ? { ...w, minimized: false, zIndex: newZ }
+            : w
+        );
+      }
+      const count = prev.length;
+      const newZ = ++nextZIndex;
+      const offset = (count % 8) * 28;
+      return [
+        ...prev,
+        {
+          id: commitHash,
+          title,
+          kind: "commit",
+          x: 80 + offset,
+          y: 80 + offset,
+          width: COMMIT_DEFAULT_WIDTH,
+          height: COMMIT_DEFAULT_HEIGHT,
+          zIndex: newZ,
+          minimized: false,
+        },
+      ];
+    });
+  }, []);
+
   const close = useCallback((docId: string) => {
     setWindows((prev) => prev.filter((w) => w.id !== docId));
   }, []);
@@ -158,6 +192,7 @@ export function useWindowManager(): UseWindowManagerReturn {
     windows,
     open,
     openMemory,
+    openCommit,
     close,
     focus,
     minimize,
