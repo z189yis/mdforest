@@ -668,15 +668,17 @@ function drawFrame(
   if (docLeaves) {
     const drawnLeaves = new Set<string>();
 
-    // Draw collapsed group icons first
+    // Draw group icons always (dimmed when expanded, acts as collapse toggle)
     for (const [commitHash, group] of leafGroups) {
-      if (expandedGroupsRef.current.has(commitHash)) continue;
-      for (const lid of group.leafIds) drawnLeaves.add(lid);
+      const expanded = expandedGroupsRef.current.has(commitHash);
+      if (!expanded) {
+        for (const lid of group.leafIds) drawnLeaves.add(lid);
+      }
       const isGroupHovered = hoveredHash === commitHash;
-      drawGroupLeafIcon(ctx, group.cx, group.cy, group.count, isGroupHovered);
+      drawGroupLeafIcon(ctx, group.cx, group.cy, group.count, isGroupHovered, expanded);
     }
 
-    // Draw individual leaf icons (skip collapsed group members)
+    // Draw individual leaf icons (only when group is expanded, or no group)
     for (const [leafId, pos] of leafPositions) {
       if (drawnLeaves.has(leafId)) continue;
       const leaf = docLeaves.leafMap[leafId];
@@ -692,15 +694,17 @@ function drawFrame(
   if (markerPositions.length > 0) {
     const drawnMarkers = new Set<string>();
 
-    // Draw collapsed group icons first
+    // Draw group icons always (dimmed when expanded, acts as collapse toggle)
     for (const [commitHash, group] of markerGroups) {
-      if (expandedMarkerGroups?.has(commitHash)) continue;
-      for (const mid of group.markerIds) drawnMarkers.add(mid);
+      const expanded = expandedMarkerGroups?.has(commitHash) ?? false;
+      if (!expanded) {
+        for (const mid of group.markerIds) drawnMarkers.add(mid);
+      }
       const isGroupHovered = hoveredHash === commitHash;
-      drawGroupMarkerIcon(ctx, group.cx, group.cy, group.count, isGroupHovered);
+      drawGroupMarkerIcon(ctx, group.cx, group.cy, group.count, isGroupHovered, expanded);
     }
 
-    // Draw individual marker icons (skip collapsed group members)
+    // Draw individual marker icons (only when group is expanded, or no group)
     for (const pos of markerPositions) {
       if (drawnMarkers.has(pos.id)) continue;
       const isHovered = hoveredMemoryId === pos.id;
@@ -1138,9 +1142,13 @@ function drawGroupLeafIcon(
   x: number, y: number,
   count: number,
   highlight: boolean,
+  expanded = false,
 ) {
+  const alpha = expanded ? 0.55 : 1;
   const size = highlight ? 9 : 8;
   const sizeY = highlight ? 7 : 6;
+
+  ctx.globalAlpha = alpha;
 
   // Glow
   ctx.beginPath();
@@ -1172,6 +1180,7 @@ function drawGroupLeafIcon(
   ctx.textBaseline = "middle";
   ctx.fillText(count + " docs", x + size + 4, y);
   ctx.textAlign = "start";
+  ctx.globalAlpha = 1;
 }
 
 // ============================================================================
@@ -1232,9 +1241,13 @@ function drawGroupMarkerIcon(
   x: number, y: number,
   count: number,
   highlight: boolean,
+  expanded = false,
 ) {
+  const alpha = expanded ? 0.55 : 1;
   const size = highlight ? 9 : 8;
   const sizeY = highlight ? 7 : 6;
+
+  ctx.globalAlpha = alpha;
 
   // Glow
   ctx.beginPath();
@@ -1266,6 +1279,7 @@ function drawGroupMarkerIcon(
   ctx.textBaseline = "middle";
   ctx.fillText(count + " memories", x + size + 4, y);
   ctx.textAlign = "start";
+  ctx.globalAlpha = 1;
 }
 
 // ============================================================================
@@ -1295,11 +1309,10 @@ function preciseHitTest(
   expandedGroups?: Set<string>,
   expandedMarkerGroups?: Set<string>,
 ): HitResult {
-  // 0. Group leaf icons (before individual leaves — larger hit area)
+  // 0. Group leaf icons (always hit-testable — collapse/expand toggle)
   const leafPositions = computeLeafPositions(tree, docLeaves, dirtyPositions);
   const leafGroups = computeLeafGroups(docLeaves, tree, leafPositions, dirtyPositions);
   for (const [commitHash, group] of leafGroups) {
-    if (expandedGroups?.has(commitHash)) continue; // expanded → skip
     const dx = (worldX - group.cx) / 10;
     const dy = (worldY - group.cy) / 8;
     if (dx * dx + dy * dy <= 1) {
@@ -1307,7 +1320,7 @@ function preciseHitTest(
     }
   }
 
-  // 1. Leaf icons (ellipse test — highest visual priority)
+  // 1. Leaf icons (only hit-testable when group is expanded, or no group)
   for (const [leafId, pos] of leafPositions) {
     // Skip leaves in collapsed groups
     const leaf = docLeaves?.leafMap[leafId];
@@ -1324,12 +1337,11 @@ function preciseHitTest(
     }
   }
 
-  // 2. Memory marker group icons (before individual markers)
+  // 2. Memory marker group icons (always hit-testable — collapse/expand toggle)
   if (memoryMarkers && memoryMarkers.length > 0) {
     const markerPositions = computeMarkerPositions(tree, memoryMarkers, 0, -1, undefined);
     const markerGroups = computeMarkerGroups(markerPositions, memoryMarkers, undefined);
     for (const [commitHash, group] of markerGroups) {
-      if (expandedMarkerGroups?.has(commitHash)) continue;
       const dx = (worldX - group.cx) / 10;
       const dy = (worldY - group.cy) / 8;
       if (dx * dx + dy * dy <= 1) {
