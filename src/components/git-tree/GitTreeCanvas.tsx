@@ -526,6 +526,18 @@ function drawFrame(
 
   // Compute groups: auto-positioned leaves sharing the same commit with ≥3 leaves get grouped
   const leafGroups = computeLeafGroups(docLeaves, tree, leafPositions, dirtyLeafPositions ?? new Map());
+  // DEBUG
+  _dbgLogCounter2 = (_dbgLogCounter2 ?? 0) + 1;
+  if (_dbgLogCounter2 % 180 === 1) {
+    console.log("[drawFrame]", {
+      hasDocLeaves: !!docLeaves,
+      leafMapSize: docLeaves ? Object.keys(docLeaves.leafMap).length : 0,
+      byCommitKeys: docLeaves ? Object.keys(docLeaves.byCommit).length : 0,
+      isolatedCount: docLeaves?.isolated?.length ?? 0,
+      leafGroupsSize: leafGroups.size,
+      leafPositionsSize: leafPositions?.size ?? 0,
+    });
+  }
 
   // Build set of leaf IDs connected to the hovered node
   const hoveredNodeLeafIds = new Set<string>();
@@ -1031,6 +1043,7 @@ interface LeafGroup {
 
 const GROUP_MIN_THRESHOLD = 3; // min leaves sharing a commit to trigger grouping
 let _dbgLogCounter = 0; // throttle debug logging
+let _dbgLogCounter2 = 0;
 
 function computeLeafGroups(
   docLeaves: DocLeavesData | undefined,
@@ -1039,7 +1052,7 @@ function computeLeafGroups(
   dirtyPositions: Map<string, LeafPosition>,
 ): Map<string, LeafGroup> {
   const groups = new Map<string, LeafGroup>();
-  if (!docLeaves) return groups;
+  if (!docLeaves) { console.log("[leaf-group] docLeaves is undefined/null, returning empty"); return groups; }
 
   // DEBUG: trace why grouping might not fire
   let _dbgTotal = 0, _dbgExplicit = 0, _dbgDirty = 0, _dbgNoHash = 0, _dbgNoPos = 0;
