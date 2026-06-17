@@ -88,6 +88,13 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, memoryMarkers
   // Leaf group expand/collapse state
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const expandedGroupsRef = useRef<Set<string>>(new Set());
+  // Sync to ref so animation loop always reads latest (avoids stale closure)
+  useEffect(() => { expandedGroupsRef.current = expandedGroups; }, [expandedGroups]);
+
+  // Marker group expand/collapse state
+  const [expandedMarkerGroups, setExpandedMarkerGroups] = useState<Set<string>>(new Set());
+  const expandedMarkerGroupsRef = useRef<Set<string>>(new Set());
+  useEffect(() => { expandedMarkerGroupsRef.current = expandedMarkerGroups; }, [expandedMarkerGroups]);
 
   // Expand animation
   const targetExpandRef = useRef(0);
@@ -134,7 +141,6 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, memoryMarkers
         ctx.scale(dpr, dpr);
       }
 
-      expandedGroupsRef.current = expandedGroups;
       drawFrame(
         ctx, tree, transform, cw, ch,
         dragHash, docLeaves,
@@ -144,7 +150,8 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, memoryMarkers
         showTimeAlwaysRef.current,
         memoryMarkersRef.current,
         hoveredMemoryIdRef.current,
-        dirtyMemoryPositionsRef.current
+        dirtyMemoryPositionsRef.current,
+        expandedMarkerGroupsRef.current,
       );
 
       // Detect scroll near bottom → trigger lazy load
@@ -237,7 +244,7 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, memoryMarkers
       }
 
       // Normal hover
-      const hit = preciseHitTest(world.x, world.y, tree, docLeavesRef.current, dirtyLeafPositionsRef.current, memoryMarkersRef.current, expandedGroupsRef.current);
+      const hit = preciseHitTest(world.x, world.y, tree, docLeavesRef.current, dirtyLeafPositionsRef.current, memoryMarkersRef.current, expandedGroupsRef.current, expandedMarkerGroupsRef.current);
       if (hit?.type === "memory-marker") {
         hoveredMemoryIdRef.current = hit.memoryId;
         hoveredHashRef.current = null;
@@ -290,6 +297,8 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, memoryMarkers
         if (pos) {
           onLeafPositionChange(leafId, pos.x, pos.y);
         }
+        // Clean up dirty position so leaf can re-enter grouping
+        dirtyLeafPositionsRef.current.delete(leafId);
       }
       draggingLeafRef.current = null;
       setDraggingLeafId(null);
@@ -300,6 +309,7 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, memoryMarkers
         if (pos) {
           onMemoryPositionChange(memId, pos.x, pos.y);
         }
+        dirtyMemoryPositionsRef.current.delete(memId);
       }
       draggingMemoryRef.current = null;
       setDraggingMemoryId(null);
@@ -315,6 +325,7 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, memoryMarkers
       if (pos) {
         onLeafPositionChange(leafId, pos.x, pos.y);
       }
+      dirtyLeafPositionsRef.current.delete(leafId);
     }
     draggingLeafRef.current = null;
     setDraggingLeafId(null);
@@ -341,9 +352,18 @@ export function GitTreeCanvas({ tree, isLoading, error, docLeaves, memoryMarkers
       const world = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
 
       // Check group icon click first
-      const hit = preciseHitTest(world.x, world.y, tree, docLeavesRef.current, dirtyLeafPositionsRef.current, memoryMarkersRef.current, expandedGroupsRef.current);
+      const hit = preciseHitTest(world.x, world.y, tree, docLeavesRef.current, dirtyLeafPositionsRef.current, memoryMarkersRef.current, expandedGroupsRef.current, expandedMarkerGroupsRef.current);
       if (hit?.type === "leaf-group") {
         setExpandedGroups(prev => {
+          const next = new Set(prev);
+          if (next.has(hit.commitHash)) next.delete(hit.commitHash);
+          else next.add(hit.commitHash);
+          return next;
+        });
+        return;
+      }
+      if (hit?.type === "marker-group") {
+        setExpandedMarkerGroups(prev => {
           const next = new Set(prev);
           if (next.has(hit.commitHash)) next.delete(hit.commitHash);
           else next.add(hit.commitHash);
@@ -482,7 +502,8 @@ function drawFrame(
   showTimeAlways?: boolean,
   memoryMarkers?: MemoryMarker[],
   hoveredMemoryId?: string | null,
-  dirtyMemoryPositions?: Map<string, { x: number; y: number }>
+  dirtyMemoryPositions?: Map<string, { x: number; y: number }>,
+  expandedMarkerGroups?: Set<string>,
 ) {
   ctx.clearRect(0, 0, canvasW, canvasH);
   ctx.save();
@@ -527,6 +548,14 @@ function drawFrame(
   // Compute groups: auto-positioned leaves sharing the same commit with ≥3 leaves get grouped
   const leafGroups = computeLeafGroups(docLeaves, tree, leafPositions, dirtyLeafPositions ?? new Map());
 
+  // Compute marker positions and groups (once, shared by connections, icons, and hit testing)
+  const markerPositions = memoryMarkers?.length
+    ? computeMarkerPositions(tree, memoryMarkers, effectiveExpand, hoveredRow, dirtyMemoryPositions)
+    : [];
+  const markerGroups = memoryMarkers?.length
+    ? computeMarkerGroups(markerPositions, memoryMarkers, dirtyMemoryPositions)
+    : new Map<string, MarkerGroup>();
+
   // Build set of leaf IDs connected to the hovered node
   const hoveredNodeLeafIds = new Set<string>();
   if (hoveredHash && docLeaves?.byCommit[hoveredHash]) {
@@ -568,15 +597,25 @@ function drawFrame(
     const drawnLeaves = new Set<string>(); // track leaves already drawn as part of a collapsed group
 
     for (const [commitHash, group] of leafGroups) {
-      if (expandedGroupsRef.current.has(commitHash)) continue; // expanded → draw individually
-      // Collapsed group → single connection
-      const groupLeafIds = new Set(group.leafIds);
+      const expanded = expandedGroupsRef.current.has(commitHash);
       const node = tree.nodes.find(n => n.hash === commitHash);
       if (!node) continue;
       const ny = node.y + (node.row > hoveredRow ? effectiveExpand : 0) + ROW_HEIGHT / 2;
       const highlight = hoveredHash === commitHash;
-      drawLeafConnection(ctx, node.x + 5, ny, group.cx, group.cy, highlight);
-      for (const lid of group.leafIds) drawnLeaves.add(lid);
+
+      if (expanded) {
+        // Expanded → draw individual connections to fan-out positions
+        const n = group.count;
+        const FAN_SPACING = 24;
+        for (let i = 0; i < group.leafIds.length; i++) {
+          const fy = group.cy + (i - (n - 1) / 2) * FAN_SPACING;
+          drawLeafConnection(ctx, node.x + 5, ny, group.cx, fy, highlight);
+        }
+      } else {
+        // Collapsed → single connection to group center
+        drawLeafConnection(ctx, node.x + 5, ny, group.cx, group.cy, highlight);
+        for (const lid of group.leafIds) drawnLeaves.add(lid);
+      }
     }
 
     // Individual leaf connections (skip leaves in collapsed groups)
@@ -598,10 +637,41 @@ function drawFrame(
     }
   }
 
-  // 3.5 Memory-to-commit connection lines (same style as leaves)
-  if (memoryMarkers && memoryMarkers.length > 0) {
-    const markerPositions = computeMarkerPositions(tree, memoryMarkers, effectiveExpand, hoveredRow, dirtyMemoryPositions);
+  // 3.5 Memory-to-commit connection lines (group-aware)
+  if (markerPositions.length > 0) {
+    const drawnMarkers = new Set<string>();
+
+    // Draw group connections (collapsed → single line, expanded → fan-out)
+    for (const [commitHash, group] of markerGroups) {
+      const expanded = expandedMarkerGroups?.has(commitHash) ?? false;
+      const node = tree.nodes.find(n =>
+        n.hash === commitHash || n.shortHash === commitHash || n.hash.startsWith(commitHash)
+      );
+      if (!node) continue;
+      const ny = node.y + (node.row > hoveredRow ? effectiveExpand : 0) + ROW_HEIGHT / 2;
+
+      if (expanded) {
+        const n = group.count;
+        const FAN_SPACING = 22;
+        for (let i = 0; i < group.markerIds.length; i++) {
+          const fy = group.cy + (i - (n - 1) / 2) * FAN_SPACING;
+          drawLeafConnection(ctx, node.x + 5, ny, group.cx, fy, false);
+          ctx.globalAlpha = 0.5;
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+        }
+      } else {
+        for (const mid of group.markerIds) drawnMarkers.add(mid);
+        drawLeafConnection(ctx, node.x + 5, ny, group.cx, group.cy, false);
+        ctx.globalAlpha = 0.5;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    // Individual marker connections
     for (const pos of markerPositions) {
+      if (drawnMarkers.has(pos.id)) continue;
       const commitHash = memoryMarkers.find(m => m.id === pos.id)?.commitHash;
       if (!commitHash) continue;
       const node = tree.nodes.find(n =>
@@ -612,7 +682,6 @@ function drawFrame(
       const color = MEMORY_GLYPHS[pos.type]?.color ?? "#a855f7";
       const isConnected = hoveredMemoryId === pos.id || hoveredHash === commitHash;
       drawLeafConnection(ctx, node.x + 5, ny, pos.x, pos.y, isConnected);
-      // Override color
       ctx.strokeStyle = isConnected ? color + "d9" : color + "66";
       ctx.stroke();
     }
@@ -622,15 +691,31 @@ function drawFrame(
   if (docLeaves) {
     const drawnLeaves = new Set<string>();
 
-    // Draw collapsed group icons first
+    // Draw group icons always (dimmed when expanded, acts as collapse toggle)
     for (const [commitHash, group] of leafGroups) {
-      if (expandedGroupsRef.current.has(commitHash)) continue;
-      for (const lid of group.leafIds) drawnLeaves.add(lid);
+      const expanded = expandedGroupsRef.current.has(commitHash);
+      if (!expanded) {
+        for (const lid of group.leafIds) drawnLeaves.add(lid);
+      }
       const isGroupHovered = hoveredHash === commitHash;
-      drawGroupLeafIcon(ctx, group.cx, group.cy, group.count, isGroupHovered);
+      drawGroupLeafIcon(ctx, group.cx, group.cy, group.count, isGroupHovered, expanded);
+      // When expanded, fan out individual leaves from the group center
+      if (expanded) {
+        const n = group.count;
+        const FAN_SPACING = 24;
+        for (let i = 0; i < group.leafIds.length; i++) {
+          const lid = group.leafIds[i]!;
+          const leaf = docLeaves.leafMap[lid];
+          if (!leaf) continue;
+          const fy = group.cy + (i - (n - 1) / 2) * FAN_SPACING;
+          const isLeafHovered = hoveredLeafId === lid;
+          const highlight = isLeafHovered;
+          drawLeafIcon(ctx, group.cx, fy, leaf.title, highlight, true);
+        }
+      }
     }
 
-    // Draw individual leaf icons (skip collapsed group members)
+    // Draw individual leaf icons (non-grouped leaves only)
     for (const [leafId, pos] of leafPositions) {
       if (drawnLeaves.has(leafId)) continue;
       const leaf = docLeaves.leafMap[leafId];
@@ -642,10 +727,38 @@ function drawFrame(
     }
   }
 
-  // 5. Memory marker icons (same style as leaves)
-  if (memoryMarkers && memoryMarkers.length > 0) {
-    const markerPositions = computeMarkerPositions(tree, memoryMarkers, effectiveExpand, hoveredRow, dirtyMemoryPositions);
+  // 5. Memory marker icons (group-aware)
+  if (markerPositions.length > 0) {
+    const drawnMarkers = new Set<string>();
+
+    // Draw group icons always (dimmed when expanded, acts as collapse toggle)
+    for (const [commitHash, group] of markerGroups) {
+      const expanded = expandedMarkerGroups?.has(commitHash) ?? false;
+      if (!expanded) {
+        for (const mid of group.markerIds) drawnMarkers.add(mid);
+      }
+      const isGroupHovered = hoveredHash === commitHash;
+      drawGroupMarkerIcon(ctx, group.cx, group.cy, group.count, isGroupHovered, expanded);
+      // When expanded, fan out individual markers from the group center
+      if (expanded) {
+        const n = group.count;
+        const FAN_SPACING = 22;
+        for (let i = 0; i < group.markerIds.length; i++) {
+          const mid = group.markerIds[i]!;
+          const mPos = markerPositions.find(p => p.id === mid);
+          if (!mPos) continue;
+          const fy = group.cy + (i - (n - 1) / 2) * FAN_SPACING;
+          const isHovered = hoveredMemoryId === mid;
+          const color = MEMORY_GLYPHS[mPos.type]?.color ?? "#a855f7";
+          const label = mPos.summary ?? mPos.type;
+          drawMemoryIcon(ctx, group.cx, fy, label, color, mPos.source, isHovered);
+        }
+      }
+    }
+
+    // Draw individual marker icons (non-grouped markers only)
     for (const pos of markerPositions) {
+      if (drawnMarkers.has(pos.id)) continue;
       const isHovered = hoveredMemoryId === pos.id;
       const color = MEMORY_GLYPHS[pos.type]?.color ?? "#a855f7";
       const label = pos.summary ?? pos.type;
@@ -1081,9 +1194,13 @@ function drawGroupLeafIcon(
   x: number, y: number,
   count: number,
   highlight: boolean,
+  expanded = false,
 ) {
+  const alpha = expanded ? 0.55 : 1;
   const size = highlight ? 9 : 8;
   const sizeY = highlight ? 7 : 6;
+
+  ctx.globalAlpha = alpha;
 
   // Glow
   ctx.beginPath();
@@ -1115,6 +1232,106 @@ function drawGroupLeafIcon(
   ctx.textBaseline = "middle";
   ctx.fillText(count + " docs", x + size + 4, y);
   ctx.textAlign = "start";
+  ctx.globalAlpha = 1;
+}
+
+// ============================================================================
+//  Memory marker grouping — same pattern as leaf grouping
+// ============================================================================
+
+interface MarkerGroup {
+  commitHash: string;
+  markerIds: string[];
+  count: number;
+  cx: number;
+  cy: number;
+}
+
+const MARKER_GROUP_MIN_THRESHOLD = 3;
+
+function computeMarkerGroups(
+  markerPositions: MarkerPosition[],
+  markers: MemoryMarker[],
+  dirtyMemoryPositions?: Map<string, { x: number; y: number }>,
+): Map<string, MarkerGroup> {
+  const groups = new Map<string, MarkerGroup>();
+  if (!markers.length) return groups;
+
+  const byCommit = new Map<string, Array<{ id: string; x: number; y: number }>>();
+  const markerMap = new Map(markers.map(m => [m.id, m]));
+
+  for (const pos of markerPositions) {
+    const marker = markerMap.get(pos.id);
+    if (!marker) continue;
+    // Skip markers with explicit or dirty positions
+    if (dirtyMemoryPositions?.has(marker.id)) continue;
+    if (marker.markerX !== null && marker.markerY !== null) continue;
+    const hash = marker.commitHash;
+    if (!hash) continue;
+    if (!byCommit.has(hash)) byCommit.set(hash, []);
+    byCommit.get(hash)!.push({ id: marker.id, x: pos.x, y: pos.y });
+  }
+
+  for (const [hash, items] of byCommit) {
+    if (items.length < MARKER_GROUP_MIN_THRESHOLD) continue;
+    let sumX = 0, sumY = 0;
+    for (const it of items) { sumX += it.x; sumY += it.y; }
+    groups.set(hash, {
+      commitHash: hash,
+      markerIds: items.map(it => it.id),
+      count: items.length,
+      cx: sumX / items.length,
+      cy: sumY / items.length,
+    });
+  }
+
+  return groups;
+}
+
+function drawGroupMarkerIcon(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number,
+  count: number,
+  highlight: boolean,
+  expanded = false,
+) {
+  const alpha = expanded ? 0.55 : 1;
+  const size = highlight ? 9 : 8;
+  const sizeY = highlight ? 7 : 6;
+
+  ctx.globalAlpha = alpha;
+
+  // Glow
+  ctx.beginPath();
+  ctx.ellipse(x, y, size + 3, sizeY + 2, -0.3, 0, Math.PI * 2);
+  ctx.fillStyle = highlight ? "rgba(168,85,247,0.35)" : "rgba(168,85,247,0.12)";
+  ctx.fill();
+
+  // Outer ring (purple)
+  ctx.beginPath();
+  ctx.ellipse(x, y, size, sizeY, -0.3, 0, Math.PI * 2);
+  ctx.fillStyle = highlight ? "#c084fc" : "rgba(168,85,247,0.5)";
+  ctx.fill();
+  ctx.strokeStyle = highlight ? "#a855f7" : "rgba(168,85,247,0.6)";
+  ctx.lineWidth = highlight ? 2 : 1;
+  ctx.stroke();
+
+  // Count badge
+  const text = String(count);
+  ctx.font = `bold ${highlight ? 10 : 9}px Inter, sans-serif`;
+  ctx.fillStyle = "#fff";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, x, y);
+
+  // Label
+  ctx.font = "10px Inter, sans-serif";
+  ctx.fillStyle = highlight ? "#d8b4fe" : "#a855f7";
+  ctx.textAlign = "start";
+  ctx.textBaseline = "middle";
+  ctx.fillText(count + " memories", x + size + 4, y);
+  ctx.textAlign = "start";
+  ctx.globalAlpha = 1;
 }
 
 // ============================================================================
@@ -1132,6 +1349,7 @@ type HitResult =
   | { type: "edge"; edgeIdx: number }
   | { type: "leaf-connection"; leafId: string; hash: string }
   | { type: "memory-marker"; memoryId: string }
+  | { type: "marker-group"; commitHash: string }
   | null;
 
 function preciseHitTest(
@@ -1141,12 +1359,12 @@ function preciseHitTest(
   dirtyPositions: Map<string, LeafPosition>,
   memoryMarkers?: MemoryMarker[],
   expandedGroups?: Set<string>,
+  expandedMarkerGroups?: Set<string>,
 ): HitResult {
-  // 0. Group leaf icons (before individual leaves — larger hit area)
+  // 0. Group leaf icons (always hit-testable — collapse/expand toggle)
   const leafPositions = computeLeafPositions(tree, docLeaves, dirtyPositions);
   const leafGroups = computeLeafGroups(docLeaves, tree, leafPositions, dirtyPositions);
   for (const [commitHash, group] of leafGroups) {
-    if (expandedGroups?.has(commitHash)) continue; // expanded → skip
     const dx = (worldX - group.cx) / 10;
     const dy = (worldY - group.cy) / 8;
     if (dx * dx + dy * dy <= 1) {
@@ -1154,30 +1372,71 @@ function preciseHitTest(
     }
   }
 
-  // 1. Leaf icons (ellipse test — highest visual priority)
+  // 1. Leaf icons (only hit-testable when group is expanded, or no group)
   for (const [leafId, pos] of leafPositions) {
     // Skip leaves in collapsed groups
     const leaf = docLeaves?.leafMap[leafId];
     const ch = leaf?.connectedHashes[0];
     if (ch) {
       const group = leafGroups.get(ch);
-      if (group && group.leafIds.includes(leafId) && !expandedGroups?.has(ch)) continue;
+      if (group && group.leafIds.includes(leafId)) {
+        if (!expandedGroups?.has(ch)) continue; // collapsed → skip
+        // Expanded → use fan-out position from group center
+        const idx = group.leafIds.indexOf(leafId);
+        const FAN_SPACING = 24;
+        const fx = group.cx;
+        const fy = group.cy + (idx - (group.count - 1) / 2) * FAN_SPACING;
+        const dx2 = (worldX - fx) / 7;
+        const dy2 = (worldY - fy) / 5;
+        if (dx2 * dx2 + dy2 * dy2 <= 1) {
+          return { type: "leaf", leafId, hash: ch };
+        }
+        continue; // already checked at fan-out position
+      }
     }
     const dx = (worldX - pos.x) / 7;  // rx=7 when highlighted
     const dy = (worldY - pos.y) / 5;  // ry=5 when highlighted
     if (dx * dx + dy * dy <= 1) {
-      const leaf = docLeaves?.leafMap[leafId];
       return { type: "leaf", leafId, hash: leaf?.connectedHashes[0] ?? null };
     }
   }
 
-  // 2. Memory markers (ellipse test — same as leaf icons)
+  // 2. Memory marker group icons (always hit-testable — collapse/expand toggle)
   if (memoryMarkers && memoryMarkers.length > 0) {
     const markerPositions = computeMarkerPositions(tree, memoryMarkers, 0, -1, undefined);
+    const markerGroups = computeMarkerGroups(markerPositions, memoryMarkers, undefined);
+    for (const [commitHash, group] of markerGroups) {
+      const dx = (worldX - group.cx) / 10;
+      const dy = (worldY - group.cy) / 8;
+      if (dx * dx + dy * dy <= 1) {
+        return { type: "marker-group", commitHash };
+      }
+    }
+
+    // Individual markers (skip members of collapsed groups, use fan-out for expanded)
     for (const pos of markerPositions) {
+      const marker = memoryMarkers.find(m => m.id === pos.id);
+      const ch = marker?.commitHash;
+      if (ch) {
+        const group = markerGroups.get(ch);
+        if (group && group.markerIds.includes(pos.id)) {
+          if (!expandedMarkerGroups?.has(ch)) continue; // collapsed → skip
+          // Expanded → use fan-out position from group center
+          const idx = group.markerIds.indexOf(pos.id);
+          const FAN_SPACING = 22;
+          const fx = group.cx;
+          const fy = group.cy + (idx - (group.count - 1) / 2) * FAN_SPACING;
+          const dx2 = (worldX - fx) / 7;
+          const dy2 = (worldY - fy) / 5;
+          if (dx2 * dx2 + dy2 * dy2 <= 1.2) {
+            return { type: "memory-marker", memoryId: pos.id };
+          }
+          continue; // already checked at fan-out position
+        }
+      }
       const dx = (worldX - pos.x) / 7;
       const dy = (worldY - pos.y) / 5;
-      if (dx * dx + dy * dy <= 1.2) { // slightly larger hit area than leaves
+      if (dx * dx + dy * dy <= 1.2) {
         return { type: "memory-marker", memoryId: pos.id };
       }
     }

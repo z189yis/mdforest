@@ -7,14 +7,13 @@ import { useGitTree } from "@/lib/hooks/useGitTree";
 import { useWindowManager } from "@/lib/hooks/useWindowManager";
 import { useMemoryMarkers } from "@/lib/hooks/useMemoryMarkers";
 import { GitTreeCanvas } from "@/components/git-tree/GitTreeCanvas";
-import { CommitDetailPanel } from "@/components/commit-detail/CommitDetailPanel";
+import { CommitDetailWindow } from "@/components/commit-detail/CommitDetailWindow";
 import { MemoryWindow } from "@/components/memory/MemoryWindow";
 import { MDWindow } from "@/components/editor/MDWindow";
 import { useYjsProvider } from "@/lib/hooks/useYjsProvider";
 import { useCollaborativeLeaves } from "@/lib/hooks/useCollaborativeLeaves";
 import { ViewportIndicator } from "@/components/collaboration/ViewportIndicator";
 import { SearchBar } from "@/components/search/SearchBar";
-import { ResizablePanels } from "@/components/layout/ResizablePanels";
 import { Spinner } from "@/components/ui";
 import { toast } from "sonner";
 
@@ -46,8 +45,6 @@ export default function RepoTreePage() {
   const [showTimeAlways, setShowTimeAlways] = useState(false);
   const { tree, isLoading: treeLoading, error: treeError, refetch: refetchTree, fetchMore, hasMore, isFetchingMore, totalCount } = useGitTree(repoId, branch);
 
-  const [selectedCommitHash, setSelectedCommitHash] = useState<string | null>(null);
-
   // Memory markers
   const { markers: memoryMarkers } = useMemoryMarkers(repoId);
 
@@ -56,6 +53,7 @@ export default function RepoTreePage() {
     windows,
     open: openWindow,
     openMemory,
+    openCommit,
     close: closeWindow,
     focus: focusWindow,
     minimize: minimizeWindow,
@@ -64,8 +62,9 @@ export default function RepoTreePage() {
     restore: restoreWindow,
   } = useWindowManager();
 
-  const docWindows = useMemo(() => windows.filter((w) => w.kind !== "memory"), [windows]);
+  const docWindows = useMemo(() => windows.filter((w) => w.kind === "doc"), [windows]);
   const memoryWindows = useMemo(() => windows.filter((w) => w.kind === "memory"), [windows]);
+  const commitWindows = useMemo(() => windows.filter((w) => w.kind === "commit"), [windows]);
 
   // Collaborative editing (active window's doc)
   const collabEnabled = process.env.NEXT_PUBLIC_COLLAB_ENABLED === "true";
@@ -132,8 +131,8 @@ export default function RepoTreePage() {
   });
 
   const handleCommitClick = useCallback((hash: string) => {
-    setSelectedCommitHash(hash);
-  }, []);
+    openCommit(hash, `Commit ${hash.substring(0, 7)}`);
+  }, [openCommit]);
   const handleMemoryClick = useCallback((memoryId: string) => {
     // Open memory in floating window — same as md leaves
     const marker = memoryMarkers.find((m) => m.id === memoryId);
@@ -171,12 +170,6 @@ export default function RepoTreePage() {
     },
     [updateLeafPosition, collabEnabled, setLeafPosition]
   );
-
-  // Panel config: tree + detail only
-  const panels = useMemo(() => [
-    { id: "tree", minWidth: 280, defaultWidth: 420, visible: true },
-    { id: "detail", minWidth: 300, defaultWidth: 380, visible: !!selectedCommitHash },
-  ], [selectedCommitHash]);
 
   // Minimized window tabs at bottom
   const minimizedWindows = windows.filter((w) => w.minimized);
@@ -236,103 +229,73 @@ export default function RepoTreePage() {
         </div>
       </div>
 
-      {/* Panels: Tree + Detail */}
+      {/* Tree Canvas */}
       <div className="flex-1 relative overflow-hidden">
-        <ResizablePanels panels={panels}>
-          {/* Left: Git Tree */}
-          <div className="relative h-full w-full">
-            {repo.cloneStatus === "ready" ? (
-              <>
-                <GitTreeCanvas
-                  tree={tree} isLoading={treeLoading} error={treeError}
-                  docLeaves={docLeaves}
-                  memoryMarkers={memoryMarkers}
-                  onCommitClick={handleCommitClick}
-                  onDocClick={handleDocClick}
-                  onMemoryClick={handleMemoryClick}
-                  onMemoryPositionChange={handleMemoryPositionChange}
-                  onFileDrop={handleFileDrop}
-                  onLeafPositionChange={handleLeafPositionChange}
-                  onNeedMore={fetchMore}
-                  hasMore={hasMore}
-                  isFetchingMore={isFetchingMore}
-                  showTimeAlways={showTimeAlways}
+        <div className="relative h-full w-full">
+          {repo.cloneStatus === "ready" ? (
+            <>
+              <GitTreeCanvas
+                tree={tree} isLoading={treeLoading} error={treeError}
+                docLeaves={docLeaves}
+                memoryMarkers={memoryMarkers}
+                onCommitClick={handleCommitClick}
+                onDocClick={handleDocClick}
+                onMemoryClick={handleMemoryClick}
+                onMemoryPositionChange={handleMemoryPositionChange}
+                onFileDrop={handleFileDrop}
+                onLeafPositionChange={handleLeafPositionChange}
+                onNeedMore={fetchMore}
+                hasMore={hasMore}
+                isFetchingMore={isFetchingMore}
+                showTimeAlways={showTimeAlways}
+              />
+              {collabEnabled && awareness && (
+                <ViewportIndicator
+                  awareness={awareness}
+                  canvasWidth={800}
+                  canvasHeight={600}
                 />
-                {collabEnabled && awareness && (
-                  <ViewportIndicator
-                    awareness={awareness}
-                    canvasWidth={800}
-                    canvasHeight={600}
-                  />
+              )}
+            </>
+          ) : (
+            <div className="flex items-center justify-center h-full">
+              <div className="text-center text-zinc-500">
+                {repo.cloneStatus === "cloning" ? (
+                  <>
+                    <Spinner className="mx-auto mb-3" />
+                    <p className="text-sm">Cloning repository...</p>
+                    <p className="text-xs text-zinc-400 mt-1">This may take a while for large repos</p>
+                  </>
+                ) : repo.cloneStatus === "error" ? (
+                  <>
+                    <p className="text-sm text-red-600 dark:text-red-400 mb-2">
+                      Clone failed: {repo.cloneError ?? "Unknown error"}
+                    </p>
+                    <button
+                      onClick={() => retryClone.mutate({ repoId })}
+                      disabled={retryClone.isPending}
+                      className="text-xs px-3 py-1.5 rounded bg-indigo-500 text-white hover:bg-indigo-600 disabled:opacity-50 transition-colors"
+                    >
+                      {retryClone.isPending ? "Retrying..." : "Retry Clone"}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <Spinner className="mx-auto mb-3" />
+                    <p className="text-sm">Waiting for clone to start...</p>
+                    <button
+                      onClick={() => retryClone.mutate({ repoId })}
+                      disabled={retryClone.isPending}
+                      className="text-xs mt-3 px-3 py-1.5 rounded bg-indigo-500 text-white hover:bg-indigo-600 disabled:opacity-50 transition-colors"
+                    >
+                      {retryClone.isPending ? "Retrying..." : "Retry Clone"}
+                    </button>
+                  </>
                 )}
-              </>
-            ) : (
-              <div className="flex items-center justify-center h-full">
-                <div className="text-center text-zinc-500">
-                  {repo.cloneStatus === "cloning" ? (
-                    <>
-                      <Spinner className="mx-auto mb-3" />
-                      <p className="text-sm">Cloning repository...</p>
-                      <p className="text-xs text-zinc-400 mt-1">This may take a while for large repos</p>
-                    </>
-                  ) : repo.cloneStatus === "error" ? (
-                    <>
-                      <p className="text-sm text-red-600 dark:text-red-400 mb-2">
-                        Clone failed: {repo.cloneError ?? "Unknown error"}
-                      </p>
-                      <button
-                        onClick={() => retryClone.mutate({ repoId })}
-                        disabled={retryClone.isPending}
-                        className="text-xs px-3 py-1.5 rounded bg-indigo-500 text-white hover:bg-indigo-600 disabled:opacity-50 transition-colors"
-                      >
-                        {retryClone.isPending ? "Retrying..." : "Retry Clone"}
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <Spinner className="mx-auto mb-3" />
-                      <p className="text-sm">Waiting for clone to start...</p>
-                      <button
-                        onClick={() => retryClone.mutate({ repoId })}
-                        disabled={retryClone.isPending}
-                        className="text-xs mt-3 px-3 py-1.5 rounded bg-indigo-500 text-white hover:bg-indigo-600 disabled:opacity-50 transition-colors"
-                      >
-                        {retryClone.isPending ? "Retrying..." : "Retry Clone"}
-                      </button>
-                    </>
-                  )}
-                </div>
               </div>
-            )}
-          </div>
-
-          {/* Right: Commit / Memory Detail */}
-          <div className="h-full overflow-auto bg-white dark:bg-zinc-950">
-            {selectedCommitHash ? (
-              <div className="p-4 space-y-4">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Commit Detail</h4>
-                  <button onClick={() => setSelectedCommitHash(null)}
-                    className="text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">✕</button>
-                </div>
-                <CommitDetailPanel
-                  repoId={repoId}
-                  commitHash={selectedCommitHash}
-                  onClose={() => setSelectedCommitHash(null)}
-                  embedded
-                  onDocClick={(docId) => {
-                    const leaf = docLeaves?.leafMap?.[docId];
-                    openWindow(docId, leaf?.title ?? "Document");
-                  }}
-                />
-              </div>
-            ) : (
-              <div className="flex items-center justify-center h-full text-zinc-400 text-sm">
-                Click a commit to see details, or a memory marker to open it
-              </div>
-            )}
-          </div>
-        </ResizablePanels>
+            </div>
+          )}
+        </div>
 
         {/* Floating MD Windows overlay */}
         {docWindows.map((w) => (
@@ -365,6 +328,24 @@ export default function RepoTreePage() {
           />
         ))}
 
+        {/* Floating Commit Detail Windows overlay */}
+        {commitWindows.map((w) => (
+          <CommitDetailWindow
+            key={w.id}
+            window={w}
+            repoId={repoId}
+            onDocClick={(docId) => {
+              const leaf = docLeaves?.leafMap?.[docId];
+              openWindow(docId, leaf?.title ?? "Document");
+            }}
+            onMove={(x, y) => updatePosition(w.id, x, y)}
+            onResize={(width, height) => updateSize(w.id, width, height)}
+            onFocus={() => focusWindow(w.id)}
+            onClose={() => closeWindow(w.id)}
+            onMinimize={() => minimizeWindow(w.id)}
+          />
+        ))}
+
       {/* Minimized window tabs */}
       {minimizedWindows.length > 0 && (
         <div className="absolute bottom-0 left-0 right-0 flex gap-1 px-2 py-1 bg-zinc-100 dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-700">
@@ -374,8 +355,17 @@ export default function RepoTreePage() {
               onClick={() => restoreWindow(w.id)}
               className="text-xs px-2 py-0.5 rounded bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-700 truncate max-w-[160px]"
             >
-              <svg className={`h-3 w-3 inline mr-1 ${w.kind === "memory" ? "text-purple-500" : "text-green-500"}`} fill="currentColor" viewBox="0 0 20 20">
-                <path d="M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 14c1.669 0 3.218.51 4.5 1.385A7.962 7.962 0 0114.5 14c1.255 0 2.443.29 3.5.804v-10A7.968 7.968 0 0014.5 4c-1.255 0-2.443.29-3.5.804V12a1 1 0 11-2 0V4.804z" />
+              <svg className={`h-3 w-3 inline mr-1 ${
+                w.kind === "commit" ? "text-amber-500" :
+                w.kind === "memory" ? "text-purple-500" :
+                "text-green-500"
+              }`} fill="currentColor" viewBox="0 0 20 20">
+                <path d={w.kind === "commit"
+                  ? "M6 3a1 1 0 011-1h.01a1 1 0 010 2H7a1 1 0 01-1-1zm3 4a1 1 0 011-1h.01a1 1 0 010 2H10a1 1 0 01-1-1zm3 4a1 1 0 011-1h.01a1 1 0 010 2H13a1 1 0 01-1-1zm-3-4a1 1 0 00-1-1H6a1 1 0 000 2h2a1 1 0 001-1zm5-4a1 1 0 00-1-1h-2a1 1 0 000 2h2a1 1 0 001-1z"
+                  : w.kind === "memory"
+                  ? "M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                  : "M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 14c1.669 0 3.218.51 4.5 1.385A7.962 7.962 0 0114.5 14c1.255 0 2.443.29 3.5.804v-10A7.968 7.968 0 0014.5 4c-1.255 0-2.443.29-3.5.804V12a1 1 0 11-2 0V4.804z"
+                } />
               </svg>
               {w.title}
             </button>

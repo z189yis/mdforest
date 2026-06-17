@@ -54,6 +54,7 @@ export function MemoryWindow({
       zIndex={win.zIndex}
       minimized={win.minimized}
       title={win.title}
+      windowKind="memory"
       onMove={onMove}
       onResize={onResize}
       onFocus={onFocus}
